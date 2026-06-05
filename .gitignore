@@ -43,3 +43,6 @@ yarn-error.*
 
 #Ignore vscode AI rules
 codacy.instructions.md
+codacy.yaml
+
+
