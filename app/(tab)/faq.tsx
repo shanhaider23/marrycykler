@@ -1,6 +1,7 @@
 import PageBackground from '../../components/pageBackground';
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useFaq } from '../../hooks/useFaq';
 import { RADIUS, SPACING } from '../../constants/theme';
 
 // ── Design tokens (mirrors HomeScreen / BookScreen / ContactScreen) ───
@@ -37,6 +38,8 @@ const FAQ_ITEMS = [
 
 export default function FaqScreen() {
     const [openItem, setOpenItem] = useState<number>(0);
+    const { faq } = useFaq();
+    const items = faq.length > 0 ? faq : FAQ_ITEMS;
 
     return (
         <PageBackground>
@@ -59,9 +62,9 @@ export default function FaqScreen() {
 
                 {/* ── FAQ accordion (single panel, whyCard pattern) ── */}
                 <View style={styles.panel}>
-                    {FAQ_ITEMS.map((item, index) => {
+                    {items.map((item, index) => {
                         const isOpen = openItem === index;
-                        const isLast = index === FAQ_ITEMS.length - 1;
+                        const isLast = index === items.length - 1;
                         return (
                             <Pressable
                                 key={item.question}

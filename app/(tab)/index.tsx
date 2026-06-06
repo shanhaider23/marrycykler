@@ -2,6 +2,8 @@ import PageBackground from '../../components/pageBackground';
 import { Link } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ImageBackground, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useBikes } from '../../hooks/useBikes';
+import { useSettings } from '../../hooks/useSettings';
 import { COLORS, RADIUS, SPACING } from '../../constants/theme';
 
 const HOME_GALLERY = [
@@ -40,6 +42,12 @@ const WHY_ITEMS = [
 ];
 
 export default function HomeScreen() {
+    const { settings } = useSettings();
+    const { bikes } = useBikes();
+    const features = settings?.features?.length ? settings.features : WHY_ITEMS;
+    const bikeCount = bikes.reduce((total, bike) => total + (Number(bike.quantity) || 0), 0);
+    const firstBike = bikes[0];
+
     return (
         <PageBackground>
             <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -48,31 +56,37 @@ export default function HomeScreen() {
                 <View style={styles.hero}>
                     <View style={styles.eyebrowRow}>
                         <View style={styles.eyebrowLine} />
-                        <Text style={styles.eyebrow}>Marry Cykler</Text>
+                        <Text style={styles.eyebrow}>{settings?.business_name ?? 'Marry Cykler'}</Text>
                     </View>
 
                     <Text style={styles.title}>
-                        {'Rent a\nbike for\nthe '}
-                        <Text style={styles.titleAccent}>city.</Text>
+                        {settings?.hero_title ?? (
+                            <>
+                                {'Rent a\nbike for\nthe '}
+                                <Text style={styles.titleAccent}>city.</Text>
+                            </>
+                        )}
                     </Text>
 
                     <Text style={styles.subtitle}>
-                        Fast pickup, easy return, and WhatsApp support all day.
+                        {settings?.hero_subtitle ?? 'Fast pickup, easy return, and WhatsApp support all day.'}
                     </Text>
 
                     <View style={styles.metricsBar}>
                         <View style={[styles.metricCell, styles.metricCellFirst]}>
-                            <Text style={[styles.metricValue, styles.metricValueAccent]}>€10</Text>
+                            <Text style={[styles.metricValue, styles.metricValueAccent]}>
+                                {firstBike?.price_per_day ?? '10'} {settings?.currency ?? 'EUR'}
+                            </Text>
                             <Text style={styles.metricLabel}>PER DAY</Text>
                         </View>
                         <View style={styles.metricDivider} />
                         <View style={styles.metricCell}>
-                            <Text style={styles.metricValue}>38</Text>
+                            <Text style={styles.metricValue}>{bikeCount || 38}</Text>
                             <Text style={styles.metricLabel}>BIKES NOW</Text>
                         </View>
                         <View style={styles.metricDivider} />
                         <View style={[styles.metricCell, styles.metricCellLast]}>
-                            <Text style={styles.metricValue}>€0</Text>
+                            <Text style={styles.metricValue}>0 {settings?.currency ?? 'EUR'}</Text>
                             <Text style={styles.metricLabel}>DEPOSIT</Text>
                         </View>
                     </View>
@@ -120,7 +134,7 @@ export default function HomeScreen() {
                 {/* ── Why us ── */}
                 <View style={styles.whyCard}>
                     <Text style={styles.whyTitle}>Why riders choose us</Text>
-                    {WHY_ITEMS.map((item, i) => (
+                    {features.map((item, i) => (
                         <View key={i} style={[styles.whyRow, i > 0 && styles.whyRowBorder]}>
                             <View style={styles.whyDot} />
                             <Text style={styles.whyText}>{item}</Text>
@@ -134,7 +148,9 @@ export default function HomeScreen() {
                         <Text style={styles.noticeTag}>Group bookings</Text>
                         <View style={styles.noticeTagLine} />
                     </View>
-                    <Text style={styles.noticeTitle}>Need 10+ bikes?</Text>
+                    <Text style={styles.noticeTitle}>
+                        {settings?.show_banner && settings.notice_banner ? settings.notice_banner : 'Need 10+ bikes?'}
+                    </Text>
                     <Text style={styles.noticeText}>
                         Contact us directly on WhatsApp or phone for a faster setup and group pricing.
                     </Text>

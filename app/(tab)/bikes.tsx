@@ -1,6 +1,6 @@
 import PageBackground from '../../components/pageBackground';
 import { useMemo } from 'react';
-import { ActivityIndicator, FlatList, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Image, StyleSheet, Text, View } from 'react-native';
 import { useBikes } from '../../hooks/useBikes';
 import { RADIUS, SPACING } from '../../constants/theme';
 
@@ -62,21 +62,32 @@ export default function BikesScreen() {
                 keyExtractor={(item) => String(item.id)}
                 showsVerticalScrollIndicator={false}
                 ListHeaderComponent={<Header />}
-                renderItem={({ item, index }) => (
-                    <View style={[styles.bikeRow, index > 0 && styles.bikeRowBorder]}>
-                        <View style={styles.bikeRowTop}>
-                            <View style={styles.whyDot} />
-                            <View style={styles.bikeInfo}>
-                                <Text style={styles.bikeName}>{item.name}</Text>
-                                <Text style={styles.bikePrice}>€{item.price_per_day} / day</Text>
+                renderItem={({ item, index }) => {
+                    const imageUri = typeof item.image === 'string' && item.image ? item.image : null;
+
+                    return (
+                        <View style={[styles.bikeRow, index > 0 && styles.bikeRowBorder]}>
+                            {imageUri && (
+                                <Image source={{ uri: imageUri }} style={styles.bikeImage} resizeMode="cover" />
+                            )}
+                            <View style={styles.bikeRowTop}>
+                                <View style={styles.whyDot} />
+                                <View style={styles.bikeInfo}>
+                                    <Text style={styles.bikeName}>{item.name}</Text>
+                                    <Text style={styles.bikePrice}>
+                                        {item.price_per_day ? `€${item.price_per_day} / day` : 'Price not set'}
+                                    </Text>
+                                </View>
+                                <Text style={styles.stockBadge}>
+                                    {item.quantity ? `Qty ${item.quantity}` : 'Qty not set'}
+                                </Text>
                             </View>
-                            <Text style={styles.stockBadge}>Qty {item.quantity}</Text>
+                            {!!item.description && (
+                                <Text style={styles.bikeDesc}>{item.description}</Text>
+                            )}
                         </View>
-                        {!!item.description && (
-                            <Text style={styles.bikeDesc}>{item.description}</Text>
-                        )}
-                    </View>
-                )}
+                    );
+                }}
                 ListEmptyComponent={
                     <View style={styles.emptyRow}>
                         <View style={styles.whyDot} />
@@ -104,6 +115,7 @@ const styles = StyleSheet.create({
     },
     content: {
         paddingBottom: SPACING.lg,
+        gap: SPACING.md,
     },
 
     // ── Hero (identical to all other screens)
@@ -153,13 +165,22 @@ const styles = StyleSheet.create({
     // ── Bike rows (whyCard pattern, but via FlatList)
     bikeRow: {
         backgroundColor: C.surface,
+        borderWidth: 1,
+        borderColor: C.border,
+        borderRadius: RADIUS.lg,
         paddingVertical: 18,
         paddingHorizontal: SPACING.lg,
         marginHorizontal: SPACING.lg,
+        overflow: 'hidden',
+    },
+    bikeImage: {
+        width: '100%',
+        height: 170,
+        borderRadius: RADIUS.md,
+        backgroundColor: C.bg,
+        marginBottom: 14,
     },
     bikeRowBorder: {
-        borderTopWidth: 1,
-        borderTopColor: '#1A1E14',
     },
     bikeRowTop: {
         flexDirection: 'row',

@@ -1,6 +1,6 @@
 // types/index.ts
 export type OpeningHour = {
-  closed: boolean;
+  closed?: boolean;
   open: string;
   close: string;
 };
@@ -28,7 +28,7 @@ export type Bike = {
   description: string;
   price_per_day: string;
   quantity: string;
-  image?: string;
+  image?: string | false;
   active: boolean;
 };
 

@@ -74,17 +74,37 @@ export default function BookScreen() {
 
     async function submitBooking() {
         if (!settings) return;
-        if (!name || !email || !bikeType) {
-            Alert.alert('Missing information', 'Please add your name, email and bike type.');
+        const cleanName = name.trim();
+        const cleanEmail = email.trim();
+        const cleanPhone = phone.trim();
+        const cleanNotes = notes.trim();
+
+        if (!cleanName) {
+            Alert.alert('Missing name', 'Please add your full name.');
+            return;
+        }
+        if (!cleanEmail) {
+            Alert.alert('Missing email', 'Please add your email address.');
+            return;
+        }
+        if (!bikeType) {
+            Alert.alert(
+                'Choose a bike type',
+                bikes.length === 0
+                    ? 'No bikes are loaded from WordPress yet. Add active bikes in RentBike App > Bikes & Prices.'
+                    : 'Please choose one of the bike types before sending the booking.'
+            );
             return;
         }
         const payload = {
-            name, email, phone,
+            name: cleanName,
+            email: cleanEmail,
+            phone: cleanPhone,
             bike_type: bikeType,
             quantity,
             start_date: startDate.toISOString().split('T')[0],
             end_date: endDate.toISOString().split('T')[0],
-            notes,
+            notes: cleanNotes,
         };
         try {
             setLoading(true);
@@ -100,8 +120,11 @@ export default function BookScreen() {
                     },
                 ]
             );
-        } catch {
-            Alert.alert('Booking failed', 'Please try again or contact us on WhatsApp.');
+        } catch (err) {
+            Alert.alert(
+                'Booking failed',
+                err instanceof Error ? err.message : 'Please try again or contact us on WhatsApp.'
+            );
         } finally {
             setLoading(false);
         }
@@ -201,7 +224,7 @@ export default function BookScreen() {
                                     <View style={styles.bikeInfo}>
                                         <Text style={styles.bikeName}>{bike.name}</Text>
                                         <Text style={styles.bikePrice}>
-                                            {settings?.currency ?? 'EUR'} {bike.price_per_day} / day
+                                            {bike.price_per_day} {settings?.currency ?? 'EUR'} / day
                                         </Text>
                                     </View>
                                     <Text style={styles.stockText}>Qty {bike.quantity}</Text>
