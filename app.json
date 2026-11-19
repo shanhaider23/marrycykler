@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "rentbike-mobile",
+    "name": "Marry Cykler",
     "slug": "rentbike-mobile",
     "scheme": "rentbike-mobile",
     "version": "1.0.0",
@@ -12,13 +12,13 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#FFCD54",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.shanhaider23.rentbikemobile"
+      "package": "nu.rentbike"
     },
     "web": {
       "favicon": "./assets/favicon.png"
