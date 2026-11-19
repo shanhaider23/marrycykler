@@ -34,7 +34,8 @@
             "enableShrinkResourcesInReleaseBuilds": true
           }
         }
-      ]
+      ],
+      "./plugins/withOptionalScreenFeatures"
     ],
     "extra": {
       "router": {},
