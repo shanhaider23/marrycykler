@@ -68,10 +68,6 @@ $today = current_time('Y-m-d');
 <body class="rb-body">
 <div class="rb-site">
 
-<?php if ($s['show_banner'] && $s['notice_banner']) : ?>
-    <div class="rb-banner"><?php echo esc_html($s['notice_banner']); ?></div>
-<?php endif; ?>
-
 <header class="rb-header">
     <div class="rb-wrap rb-header-in">
         <a class="rb-brand" href="<?php echo esc_url($home); ?>">
@@ -266,7 +262,7 @@ $today = current_time('Y-m-d');
                         <label>Email
                             <input type="email" name="email" autocomplete="email" required>
                         </label>
-                        <label>Phone <span class="rb-muted">(optional)</span>
+                        <label>Phone <span class="rb-muted"><?php echo $s['sms_enabled'] ? '(for SMS confirmation)' : '(optional)'; ?></span>
                             <input type="tel" name="phone" autocomplete="tel">
                         </label>
                     </div>

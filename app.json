@@ -6,7 +6,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true
     },
@@ -32,6 +32,7 @@
       "eas": {
         "projectId": "4b5fa593-d068-4d27-98cb-0eab67ed64cd"
       }
-    }
+    },
+    "backgroundColor": "#0C0F0A"
   }
 }

@@ -1,134 +1,109 @@
+import { useRouter } from 'expo-router';
+import { ActivityIndicator, FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import PageBackground from '../../components/pageBackground';
-import { useMemo } from 'react';
-import { ActivityIndicator, FlatList, Image, StyleSheet, Text, View } from 'react-native';
-import { useBikes } from '../../hooks/useBikes';
 import { RADIUS, SPACING } from '../../constants/theme';
+import { useBikes } from '../../hooks/useBikes';
+import { useSettings } from '../../hooks/useSettings';
+import { formatPrice } from '../../utils/shop';
 
-// ── Design tokens (mirrors all other screens) ─────────────
+// ── Design tokens (same as the website) ──────────────────
 const C = {
     bg: '#0C0F0A',
     surface: '#111408',
     border: '#1E2218',
+    borderGlow: '#2A3A1A',
     accent: '#8DBF5B',
     white: '#F0EDE6',
-    muted: '#8A8A80',
-    faint: '#5A5A52',
-    info: '#5B9ABF',
+    muted: '#9A9A8E',
+    faint: '#6E6E64',
 };
 
 function Header() {
     return (
-        <PageBackground>
-            <View style={styles.hero}>
-                <View style={styles.eyebrowRow}>
-                    <View style={styles.eyebrowLine} />
-                    <Text style={styles.eyebrow}>Inventory</Text>
-                </View>
-                <Text style={styles.title}>
-                    {'Our\n'}
-                    <Text style={styles.titleAccent}>bikes.</Text>
-                </Text>
-                <Text style={styles.subtitle}>
-                    Choose your style and continue in the Book tab.
-
-                </Text>
+        <View style={styles.hero}>
+            <View style={styles.eyebrowRow}>
+                <View style={styles.eyebrowLine} />
+                <Text style={styles.eyebrow}>Our bikes</Text>
             </View>
-        </PageBackground>
+            <Text style={styles.title}>Pick your ride</Text>
+            <Text style={styles.subtitle}>Lock and lights included with every bike.</Text>
+        </View>
     );
 }
 
 export default function BikesScreen() {
+    const router = useRouter();
     const { bikes, loading } = useBikes();
-    const content = useMemo(() => bikes, [bikes]);
-
-    if (loading) {
-        return (
-            <PageBackground>
-                <Header />
-                <View style={styles.loadingRow}>
-                    <ActivityIndicator color={C.accent} size="small" />
-                    <Text style={styles.loadingText}>Loading bikes…</Text>
-                </View>
-            </PageBackground>
-        );
-    }
+    const { settings } = useSettings();
+    const currency = settings?.currency ?? '€';
 
     return (
         <PageBackground>
             <FlatList
-                style={styles.list}
                 contentContainerStyle={styles.content}
-                data={content}
+                data={bikes}
                 keyExtractor={(item) => String(item.id)}
                 showsVerticalScrollIndicator={false}
                 ListHeaderComponent={<Header />}
-                renderItem={({ item, index }) => {
+                ListEmptyComponent={
+                    loading ? (
+                        <View style={styles.loadingRow}>
+                            <ActivityIndicator color={C.accent} size="small" />
+                            <Text style={styles.muted}>Loading bikes…</Text>
+                        </View>
+                    ) : (
+                        <View style={styles.card}>
+                            <Text style={styles.muted}>Message us on WhatsApp for current bikes and prices.</Text>
+                        </View>
+                    )
+                }
+                renderItem={({ item }) => {
                     const imageUri = typeof item.image === 'string' && item.image ? item.image : null;
-
+                    const price = formatPrice(item.price_per_day, currency);
                     return (
-                        <View style={[styles.bikeRow, index > 0 && styles.bikeRowBorder]}>
-                            {imageUri && (
-                                <Image source={{ uri: imageUri }} style={styles.bikeImage} resizeMode="cover" />
-                            )}
-                            <View style={styles.bikeRowTop}>
-                                <View style={styles.whyDot} />
-                                <View style={styles.bikeInfo}>
-                                    <Text style={styles.bikeName}>{item.name}</Text>
-                                    <Text style={styles.bikePrice}>
-                                        {item.price_per_day ? `€${item.price_per_day} / day` : 'Price not set'}
-                                    </Text>
+                        <View style={styles.card}>
+                            {imageUri && <Image source={{ uri: imageUri }} style={styles.image} resizeMode="cover" />}
+                            <View style={styles.body}>
+                                <View style={styles.head}>
+                                    <Text style={styles.name}>{item.name}</Text>
+                                    {!!price && (
+                                        <Text style={styles.price}>
+                                            {price}
+                                            <Text style={styles.perDay}> / day</Text>
+                                        </Text>
+                                    )}
                                 </View>
-                                <Text style={styles.stockBadge}>
-                                    {item.quantity ? `Qty ${item.quantity}` : 'Qty not set'}
-                                </Text>
+                                {!!item.description && <Text style={styles.desc}>{item.description}</Text>}
+                                <Pressable
+                                    style={styles.bookBtn}
+                                    onPress={() => router.push({ pathname: '/(tab)/book', params: { bike: item.name } })}
+                                >
+                                    <Text style={styles.bookBtnText}>Book this bike</Text>
+                                </Pressable>
                             </View>
-                            {!!item.description && (
-                                <Text style={styles.bikeDesc}>{item.description}</Text>
-                            )}
                         </View>
                     );
                 }}
-                ListEmptyComponent={
-                    <View style={styles.emptyRow}>
-                        <View style={styles.whyDot} />
-                        <Text style={styles.emptyText}>No bikes available right now.</Text>
-                    </View>
-                }
-                // Wrap all bike rows in a single panel card
-                ListFooterComponent={<View style={styles.panelFooter} />}
             />
         </PageBackground>
     );
 }
 
-// Panel wrapper injected via ListHeaderComponent spacing + renderItem containment
-// We achieve the "single panel" look by rendering items inside a pseudo-panel
-// created by matching the first/last item border radius via the FlatList wrapper.
-
 const styles = StyleSheet.create({
-    list: {
-        flex: 1,
-    },
-    loadingPage: {
-        flex: 1,
-        backgroundColor: C.bg,
-    },
     content: {
-        paddingBottom: SPACING.lg,
+        paddingBottom: SPACING.xl,
         gap: SPACING.md,
     },
-
-    // ── Hero (identical to all other screens)
     hero: {
-        padding: SPACING.lg,
+        paddingHorizontal: SPACING.lg,
         paddingTop: 32,
-        paddingBottom: SPACING.lg,
+        paddingBottom: SPACING.sm,
+        gap: 14,
     },
     eyebrowRow: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,
-        marginBottom: 16,
     },
     eyebrowLine: {
         width: 24,
@@ -144,126 +119,85 @@ const styles = StyleSheet.create({
     },
     title: {
         color: C.white,
-        fontSize: 46,
+        fontSize: 40,
         fontWeight: '900',
-        lineHeight: 48,
+        lineHeight: 44,
         letterSpacing: -1,
-        marginBottom: 10,
-    },
-    titleAccent: {
-        color: C.accent,
-        fontStyle: 'italic',
     },
     subtitle: {
         color: C.muted,
-        fontSize: 13,
+        fontSize: 15,
         fontWeight: '300',
         lineHeight: 22,
-        maxWidth: 280,
     },
-
-    // ── Bike rows (whyCard pattern, but via FlatList)
-    bikeRow: {
+    card: {
         backgroundColor: C.surface,
         borderWidth: 1,
         borderColor: C.border,
         borderRadius: RADIUS.lg,
-        paddingVertical: 18,
-        paddingHorizontal: SPACING.lg,
         marginHorizontal: SPACING.lg,
         overflow: 'hidden',
     },
-    bikeImage: {
+    image: {
         width: '100%',
-        height: 170,
-        borderRadius: RADIUS.md,
+        aspectRatio: 3 / 2,
         backgroundColor: C.bg,
-        marginBottom: 14,
     },
-    bikeRowBorder: {
+    body: {
+        padding: 20,
+        gap: 12,
+        alignItems: 'flex-start',
     },
-    bikeRowTop: {
+    head: {
         flexDirection: 'row',
-        alignItems: 'center',
-        gap: 14,
+        alignItems: 'baseline',
+        justifyContent: 'space-between',
+        gap: 12,
+        alignSelf: 'stretch',
     },
-    whyDot: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-        backgroundColor: C.accent,
-        flexShrink: 0,
-        marginTop: 2,
-        alignSelf: 'flex-start',
-    },
-    bikeInfo: {
-        flex: 1,
-    },
-    bikeName: {
+    name: {
         color: C.white,
-        fontSize: 15,
-        fontWeight: '500',
-        marginBottom: 3,
+        fontSize: 20,
+        fontWeight: '800',
+        flexShrink: 1,
     },
-    bikePrice: {
+    price: {
         color: C.accent,
-        fontSize: 12,
+        fontSize: 22,
+        fontWeight: '800',
+    },
+    perDay: {
+        color: C.faint,
+        fontSize: 13,
         fontWeight: '400',
     },
-    stockBadge: {
-        color: C.info,
-        fontSize: 11,
-        fontWeight: '500',
-        letterSpacing: 0.5,
-    },
-    bikeDesc: {
+    desc: {
         color: C.muted,
-        fontSize: 13,
-        fontWeight: '300',
-        lineHeight: 20,
-        marginTop: 10,
-        marginLeft: 20,
-        paddingLeft: 14,
-        borderLeftWidth: 1,
-        borderLeftColor: '#1E2218',
+        fontSize: 15,
+        lineHeight: 22,
     },
-
-    // ── Panel border shell (top + bottom rounded edges via first/last wrapper)
-    panelFooter: {
-        height: 0,
-        marginHorizontal: SPACING.lg,
+    bookBtn: {
+        borderWidth: 1,
+        borderColor: C.borderGlow,
+        borderRadius: 100,
+        paddingVertical: 10,
+        paddingHorizontal: 20,
+        marginTop: 2,
     },
-
-    // ── Loading
+    bookBtnText: {
+        color: C.white,
+        fontSize: 14,
+        fontWeight: '700',
+    },
     loadingRow: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,
         paddingHorizontal: SPACING.lg,
-        marginTop: 8,
     },
-    loadingText: {
+    muted: {
         color: C.muted,
-        fontSize: 13,
-        fontWeight: '300',
-    },
-
-    // ── Empty
-    emptyRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 14,
-        paddingVertical: 18,
-        paddingHorizontal: SPACING.lg,
-        marginHorizontal: SPACING.lg,
-        backgroundColor: C.surface,
-        borderRadius: RADIUS.lg,
-        borderWidth: 1,
-        borderColor: C.border,
-    },
-    emptyText: {
-        color: C.muted,
-        fontSize: 13,
-        fontWeight: '300',
+        fontSize: 14,
+        padding: 4,
     },
 });

@@ -20,6 +20,12 @@ export type AppSettings = {
   show_banner: boolean;
   features: string[];
   opening_hours: Record<string, OpeningHour>;
+  // Added by the website plugin (version 2). Missing on older plugin versions.
+  about_text?: string;
+  location_note?: string;
+  gallery?: string[];
+  play_url?: string;
+  reviews_url?: string;
 };
 
 export type Bike = {
@@ -38,6 +44,20 @@ export type FaqItem = {
   answer: string;
 };
 
+export type Availability = {
+  name: string;
+  /** Bikes left for the chosen dates. null means no stock limit is set. */
+  available: number | null;
+};
+
+export type BookingResult = {
+  success: boolean;
+  booking_id: number;
+  message: string;
+  days?: number;
+  total?: string;
+};
+
 export type BookingPayload = {
   name: string;
   email: string;
@@ -47,4 +67,5 @@ export type BookingPayload = {
   start_date: string;
   end_date: string;
   notes?: string;
+  source?: 'app' | 'website';
 };

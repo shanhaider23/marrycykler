@@ -108,8 +108,7 @@ body.rb-body {
 
 .rb-actions { display: flex; flex-wrap: wrap; gap: 12px; }
 
-/* Banner + header */
-.rb-banner { padding: 9px 20px; background: var(--surface-2); border-bottom: 1px solid var(--border-glow); color: var(--accent); font-size: 14px; text-align: center; }
+/* Header */
 
 .rb-header { position: sticky; top: 0; z-index: 50; background: rgba(12, 15, 10, 0.88); border-bottom: 1px solid var(--border); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
 .rb-header-in { display: flex; align-items: center; gap: 24px; min-height: 68px; }

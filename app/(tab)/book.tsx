@@ -1,354 +1,326 @@
-import PageBackground from '../../components/pageBackground';
-import React, { useMemo, useState } from 'react';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useEffect, useMemo, useState } from 'react';
 import {
-    View,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    ScrollView,
-    StyleSheet,
-    Alert,
     ActivityIndicator,
     Linking,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { LinearGradient } from 'expo-linear-gradient';
-import { api } from '../../services/api';
-import { openWhatsApp, createWhatsAppBookingText } from '../../services/whatsappService';
-import { useSettings } from '../../hooks/useSettings';
-import { useBikes } from '../../hooks/useBikes';
+import PageBackground from '../../components/pageBackground';
 import { RADIUS, SPACING } from '../../constants/theme';
+import { useBikes } from '../../hooks/useBikes';
+import { useSettings } from '../../hooks/useSettings';
+import { api } from '../../services/api';
+import { formatPrice, toIsoDate } from '../../utils/shop';
 
-// ── Design tokens (mirrors HomeScreen) ───────────────────
+// ── Design tokens (same as the website) ──────────────────
 const C = {
     bg: '#0C0F0A',
     surface: '#111408',
+    surface2: '#0E1A08',
     border: '#1E2218',
     borderGlow: '#2A3A1A',
     accent: '#8DBF5B',
-    accentDim: '#2A4A1A',
     white: '#F0EDE6',
-    muted: '#8A8A80',
-    faint: '#5A5A52',
-    info: '#5B9ABF',
+    muted: '#9A9A8E',
+    faint: '#6E6E64',
+    red: '#F08A7A',
 };
 
-function getDurationDays(startDate: Date, endDate: Date) {
-    const msPerDay = 1000 * 60 * 60 * 24;
-    const start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime();
-    const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime();
-    return Math.max(1, Math.ceil((end - start) / msPerDay) + 1);
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function startOfToday() {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
 
-function parsePrice(value: string) {
-    const normalized = value.replace(',', '.').replace(/[^0-9.]/g, '');
-    return Number(normalized) || 0;
+function daysBetween(start: Date, end: Date) {
+    const a = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime();
+    const b = new Date(end.getFullYear(), end.getMonth(), end.getDate()).getTime();
+    return Math.round((b - a) / 86400000) + 1;
 }
 
 function fmt(date: Date) {
-    return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    return date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 export default function BookScreen() {
+    const router = useRouter();
+    const params = useLocalSearchParams<{ bike?: string }>();
     const { settings } = useSettings();
-    const { bikes } = useBikes();
+    const { bikes, loading: bikesLoading } = useBikes();
+    const currency = settings?.currency ?? '€';
 
+    const [bikeType, setBikeType] = useState('');
+    const [quantity, setQuantity] = useState(1);
+    const [startDate, setStartDate] = useState(startOfToday);
+    const [endDate, setEndDate] = useState(startOfToday);
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [phone, setPhone] = useState('');
-    const [bikeType, setBikeType] = useState('');
-    const [quantity, setQuantity] = useState(1);
-    const [startDate, setStartDate] = useState(new Date());
-    const [endDate, setEndDate] = useState(new Date(Date.now() + 86400000));
     const [notes, setNotes] = useState('');
-    const [showStartPicker, setShowStartPicker] = useState(false);
-    const [showEndPicker, setShowEndPicker] = useState(false);
-    const [loading, setLoading] = useState(false);
+    const [picker, setPicker] = useState<'start' | 'end' | null>(null);
+    const [available, setAvailable] = useState<Record<string, number | null>>({});
+    const [error, setError] = useState('');
+    const [sending, setSending] = useState(false);
 
-    const selectedBike = useMemo(
-        () => bikes.find((bike) => bike.name === bikeType),
-        [bikes, bikeType]
-    );
-    const durationDays = getDurationDays(startDate, endDate);
-    const estimatedTotal = (selectedBike ? parsePrice(selectedBike.price_per_day) : 0) * quantity * durationDays;
+    // Preselect the bike chosen on the Bikes tab, otherwise the first one.
+    useEffect(() => {
+        if (params.bike && bikes.some((bike) => bike.name === params.bike)) {
+            setBikeType(params.bike);
+        } else if (!bikeType && bikes.length) {
+            setBikeType(bikes[0].name);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [params.bike, bikes]);
 
-    async function submitBooking() {
-        if (!settings) return;
-        const cleanName = name.trim();
-        const cleanEmail = email.trim();
-        const cleanPhone = phone.trim();
-        const cleanNotes = notes.trim();
+    // Bikes left for the chosen dates (needs website plugin 2.0 or newer).
+    const startIso = toIsoDate(startDate);
+    const endIso = toIsoDate(endDate);
+    useEffect(() => {
+        let cancelled = false;
+        api.getAvailability(startIso, endIso)
+            .then((list) => {
+                if (cancelled) return;
+                const map: Record<string, number | null> = {};
+                list.forEach((item) => {
+                    map[item.name] = item.available;
+                });
+                setAvailable(map);
+            })
+            .catch(() => {
+                if (!cancelled) setAvailable({}); // the server checks again when sending
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [startIso, endIso]);
 
-        if (!cleanName) {
-            Alert.alert('Missing name', 'Please add your full name.');
-            return;
-        }
-        if (!cleanEmail) {
-            Alert.alert('Missing email', 'Please add your email address.');
-            return;
-        }
-        if (!bikeType) {
-            Alert.alert(
-                'Choose a bike type',
-                bikes.length === 0
-                    ? 'No bikes are loaded from WordPress yet. Add active bikes in RentBike App > Bikes & Prices.'
-                    : 'Please choose one of the bike types before sending the booking.'
-            );
-            return;
-        }
+    const selectedBike = useMemo(() => bikes.find((bike) => bike.name === bikeType), [bikes, bikeType]);
+    const days = daysBetween(startDate, endDate);
+    const price = selectedBike ? parseFloat(selectedBike.price_per_day) : NaN;
+    const total = Number.isFinite(price) ? formatPrice(price * quantity * days, currency) : '';
+    const left = available[bikeType];
+
+    function changeStart(date: Date) {
+        const day = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+        setStartDate(day);
+        if (endDate < day) setEndDate(day);
+    }
+
+    async function submit() {
+        setError('');
         const payload = {
-            name: cleanName,
-            email: cleanEmail,
-            phone: cleanPhone,
+            name: name.trim(),
+            email: email.trim(),
+            phone: phone.trim(),
             bike_type: bikeType,
             quantity,
-            start_date: startDate.toISOString().split('T')[0],
-            end_date: endDate.toISOString().split('T')[0],
-            notes: cleanNotes,
+            start_date: startIso,
+            end_date: endIso,
+            notes: notes.trim(),
+            source: 'app' as const,
         };
+
+        if (!payload.bike_type) return setError('Please choose a bike.');
+        if (!payload.name) return setError('Please add your full name.');
+        if (!EMAIL.test(payload.email)) return setError('Please add a valid email address so we can confirm your booking.');
+        if (typeof left === 'number' && quantity > left) {
+            return setError(
+                left > 0
+                    ? `Only ${left} × ${bikeType} left for these dates.`
+                    : `${bikeType} is fully booked for these dates. Try other dates or message us on WhatsApp.`
+            );
+        }
+
         try {
-            setLoading(true);
+            setSending(true);
             const result = await api.createBooking(payload);
-            Alert.alert(
-                'Booking received',
-                `Thank you. Your booking request #${result.booking_id} has been received.`,
-                [
-                    { text: 'OK' },
-                    {
-                        text: 'Send on WhatsApp also',
-                        onPress: () => openWhatsApp(settings.whatsapp, createWhatsAppBookingText(payload)),
-                    },
-                ]
-            );
+            router.push({
+                pathname: '/booking-confirm',
+                params: {
+                    id: String(result.booking_id),
+                    bike: bikeType,
+                    quantity: String(quantity),
+                    start: startIso,
+                    end: endIso,
+                    name: payload.name,
+                    notes: payload.notes,
+                    whatsapp: settings?.whatsapp ?? '4531131165',
+                },
+            });
+            setNotes('');
         } catch (err) {
-            Alert.alert(
-                'Booking failed',
-                err instanceof Error ? err.message : 'Please try again or contact us on WhatsApp.'
-            );
+            setError(err instanceof Error ? err.message : 'Could not send the booking. Please try again or message us on WhatsApp.');
         } finally {
-            setLoading(false);
+            setSending(false);
         }
     }
 
     return (
         <PageBackground>
-            <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+            <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
 
                 {/* ── Hero ── */}
                 <View style={styles.hero}>
                     <View style={styles.eyebrowRow}>
                         <View style={styles.eyebrowLine} />
-                        <Text style={styles.eyebrow}>Marry Cykler</Text>
+                        <Text style={styles.eyebrow}>Online booking</Text>
                     </View>
-                    <Text style={styles.title}>
-                        {'Reserve\nyour '}
-                        <Text style={styles.titleAccent}>ride.</Text>
-                    </Text>
-                    <Text style={styles.subtitle}>
-                        Quick form, instant request, WhatsApp backup.
-                    </Text>
-
-                    <View style={styles.metricsBar}>
-                        <View style={styles.metricCell}>
-                            <Text style={[styles.metricValue, styles.metricValueAccent]}>€0</Text>
-                            <Text style={styles.metricLabel}>DEPOSIT</Text>
-                        </View>
-                        <View style={styles.metricDivider} />
-                        <View style={styles.metricCell}>
-                            <Text style={styles.metricValue}>€10</Text>
-                            <Text style={styles.metricLabel}>FROM/DAY</Text>
-                        </View>
-                        <View style={styles.metricDivider} />
-                        <View style={styles.metricCell}>
-                            <Text style={styles.metricValue}>38</Text>
-                            <Text style={styles.metricLabel}>BIKES NOW</Text>
-                        </View>
-                    </View>
+                    <Text style={styles.title}>Reserve your ride</Text>
+                    <Text style={styles.subtitle}>Send a request in under a minute. We confirm by email or phone.</Text>
                 </View>
 
-                {/* ── Quick contact ── */}
-                <View style={styles.quickRow}>
-                    <TouchableOpacity
-                        style={styles.quickCard}
-                        onPress={() => Linking.openURL(`https://wa.me/${settings?.whatsapp ?? '4531131165'}`)}
-                    >
-                        <View style={styles.eyebrowRow}>
-                            <View style={styles.eyebrowLine} />
-                            <Text style={styles.eyebrow}>WhatsApp</Text>
-                        </View>
-                        <Text style={styles.quickValue}>Fast booking help</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={styles.quickCard}
-                        onPress={() => Linking.openURL(`tel:${settings?.phone ?? '+4531131165'}`)}
-                    >
-                        <View style={styles.eyebrowRow}>
-                            <View style={styles.eyebrowLine} />
-                            <Text style={styles.eyebrow}>Call us</Text>
-                        </View>
-                        <Text style={styles.quickValue}>{settings?.phone ?? '+45 31 13 11 65'}</Text>
-                    </TouchableOpacity>
-                </View>
-
-                {/* ── Your details ── */}
+                {/* ── 1. Bike ── */}
                 <View style={styles.panel}>
-                    <Text style={styles.panelTitle}>Your details</Text>
-                    <View style={styles.panelDivider} />
-                    <TextInput style={styles.input} placeholder="Full name" placeholderTextColor={C.faint} value={name} onChangeText={setName} />
-                    <TextInput style={styles.input} placeholder="Email" placeholderTextColor={C.faint} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
-                    <TextInput style={[styles.input, styles.inputLast]} placeholder="Phone" placeholderTextColor={C.faint} value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
-                </View>
-
-                {/* ── Bike type ── */}
-                <View style={styles.panel}>
-                    <Text style={styles.panelTitle}>Bike type</Text>
-                    <View style={styles.panelDivider} />
-                    {bikes.length === 0 ? (
-                        <View style={styles.emptyRow}>
-                            <View style={styles.whyDot} />
-                            <Text style={styles.emptyText}>No bikes loaded. Use WhatsApp for instant availability.</Text>
-                        </View>
+                    <Text style={styles.panelTitle}>1. Bike</Text>
+                    {bikesLoading ? (
+                        <ActivityIndicator color={C.accent} />
+                    ) : bikes.length === 0 ? (
+                        <Text style={styles.muted}>No bikes loaded. Message us on WhatsApp for availability.</Text>
                     ) : (
-                        bikes.map((bike, i) => (
-                            <TouchableOpacity
-                                key={bike.id}
-                                style={[
-                                    styles.bikeRow,
-                                    i > 0 && styles.bikeRowBorder,
-                                    bikeType === bike.name && styles.bikeRowActive,
-                                ]}
-                                onPress={() => setBikeType(bike.name)}
-                            >
-                                <View style={styles.bikeRowInner}>
-                                    <View style={[styles.whyDot, bikeType === bike.name && styles.whyDotActive]} />
-                                    <View style={styles.bikeInfo}>
-                                        <Text style={styles.bikeName}>{bike.name}</Text>
-                                        <Text style={styles.bikePrice}>
-                                            {bike.price_per_day} {settings?.currency ?? 'EUR'} / day
-                                        </Text>
-                                    </View>
-                                    <Text style={styles.stockText}>Qty {bike.quantity}</Text>
-                                </View>
-                            </TouchableOpacity>
-                        ))
+                        <View style={styles.options}>
+                            {bikes.map((bike) => {
+                                const active = bike.name === bikeType;
+                                const bikeLeft = available[bike.name];
+                                const priceText = formatPrice(bike.price_per_day, currency);
+                                return (
+                                    <Pressable
+                                        key={bike.id}
+                                        style={[styles.option, active && styles.optionActive]}
+                                        onPress={() => setBikeType(bike.name)}
+                                        accessibilityRole="radio"
+                                        accessibilityState={{ selected: active }}
+                                    >
+                                        <Text style={styles.optionName}>{bike.name}</Text>
+                                        {!!priceText && <Text style={styles.optionPrice}>{priceText} / day</Text>}
+                                        {typeof bikeLeft === 'number' && (
+                                            <Text style={[styles.optionLeft, bikeLeft === 0 && styles.optionOut]}>
+                                                {bikeLeft > 0 ? `${bikeLeft} available for your dates` : 'Fully booked for your dates'}
+                                            </Text>
+                                        )}
+                                    </Pressable>
+                                );
+                            })}
+                        </View>
                     )}
-                </View>
 
-                {/* ── Quantity & dates ── */}
-                <View style={styles.panel}>
-                    <Text style={styles.panelTitle}>Quantity & dates</Text>
-                    <View style={styles.panelDivider} />
-
-                    {/* Quantity stepper */}
                     <View style={styles.stepperRow}>
-                        <Text style={styles.stepperLabel}>Bikes</Text>
+                        <Text style={styles.muted}>Number of bikes</Text>
                         <View style={styles.stepper}>
-                            <TouchableOpacity style={styles.stepBtn} onPress={() => setQuantity(Math.max(1, quantity - 1))}>
+                            <Pressable style={styles.stepBtn} onPress={() => setQuantity((q) => Math.max(1, q - 1))} accessibilityLabel="Fewer bikes">
                                 <Text style={styles.stepBtnText}>−</Text>
-                            </TouchableOpacity>
+                            </Pressable>
                             <Text style={styles.stepValue}>{quantity}</Text>
-                            <TouchableOpacity style={styles.stepBtn} onPress={() => setQuantity(quantity + 1)}>
+                            <Pressable style={styles.stepBtn} onPress={() => setQuantity((q) => Math.min(50, q + 1))} accessibilityLabel="More bikes">
                                 <Text style={styles.stepBtnText}>+</Text>
-                            </TouchableOpacity>
+                            </Pressable>
                         </View>
                     </View>
+                </View>
 
-                    <View style={styles.panelDivider} />
-
-                    {/* Start date */}
-                    <TouchableOpacity style={styles.dateRow} onPress={() => setShowStartPicker(true)}>
-                        <View style={styles.dateRowInner}>
-                            <View style={styles.whyDot} />
-                            <View>
-                                <Text style={styles.dateLabel}>START DATE</Text>
-                                <Text style={styles.dateValue}>{fmt(startDate)}</Text>
-                            </View>
-                        </View>
-                    </TouchableOpacity>
-                    {showStartPicker && (
+                {/* ── 2. Dates ── */}
+                <View style={styles.panel}>
+                    <Text style={styles.panelTitle}>2. Dates</Text>
+                    <Pressable style={styles.field} onPress={() => setPicker('start')}>
+                        <Text style={styles.fieldLabel}>Pick-up day</Text>
+                        <Text style={styles.fieldValue}>{fmt(startDate)}</Text>
+                    </Pressable>
+                    <Pressable style={styles.field} onPress={() => setPicker('end')}>
+                        <Text style={styles.fieldLabel}>Return day</Text>
+                        <Text style={styles.fieldValue}>{fmt(endDate)}</Text>
+                    </Pressable>
+                    {picker && (
                         <DateTimePicker
-                            value={startDate}
+                            value={picker === 'start' ? startDate : endDate}
                             mode="date"
-                            minimumDate={new Date()}
-                            onDismiss={() => setShowStartPicker(false)}
-                            onValueChange={(_, date) => { setShowStartPicker(false); if (date) setStartDate(date); }}
-                        />
-                    )}
-
-                    <View style={styles.panelDivider} />
-
-                    {/* End date */}
-                    <TouchableOpacity style={styles.dateRow} onPress={() => setShowEndPicker(true)}>
-                        <View style={styles.dateRowInner}>
-                            <View style={styles.whyDot} />
-                            <View>
-                                <Text style={styles.dateLabel}>END DATE</Text>
-                                <Text style={styles.dateValue}>{fmt(endDate)}</Text>
-                            </View>
-                        </View>
-                    </TouchableOpacity>
-                    {showEndPicker && (
-                        <DateTimePicker
-                            value={endDate}
-                            mode="date"
-                            minimumDate={startDate}
-                            onDismiss={() => setShowEndPicker(false)}
-                            onValueChange={(_, date) => { setShowEndPicker(false); if (date) setEndDate(date); }}
+                            minimumDate={picker === 'start' ? startOfToday() : startDate}
+                            onDismiss={() => setPicker(null)}
+                            onValueChange={(_, date) => {
+                                const which = picker;
+                                setPicker(null);
+                                if (!date) return;
+                                if (which === 'start') changeStart(date);
+                                else setEndDate(new Date(date.getFullYear(), date.getMonth(), date.getDate()));
+                            }}
                         />
                     )}
                 </View>
 
-                {/* ── Extra notes ── */}
+                {/* ── 3. Your details ── */}
                 <View style={styles.panel}>
-                    <Text style={styles.panelTitle}>Extra notes</Text>
-                    <View style={styles.panelDivider} />
+                    <Text style={styles.panelTitle}>3. Your details</Text>
+                    <Text style={styles.fieldLabel}>Full name</Text>
+                    <TextInput style={styles.input} value={name} onChangeText={setName} autoComplete="name" textContentType="name" placeholderTextColor={C.faint} />
+                    <Text style={styles.fieldLabel}>Email</Text>
+                    <TextInput style={styles.input} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" autoComplete="email" textContentType="emailAddress" />
+                    <Text style={styles.fieldLabel}>Phone (optional)</Text>
+                    <TextInput style={styles.input} value={phone} onChangeText={setPhone} keyboardType="phone-pad" autoComplete="tel" textContentType="telephoneNumber" />
+                    <Text style={styles.fieldLabel}>Notes (optional)</Text>
                     <TextInput
-                        style={[styles.input, styles.textArea, styles.inputLast]}
-                        placeholder="Pickup time, child seat, cargo preference…"
-                        placeholderTextColor={C.faint}
+                        style={[styles.input, styles.textArea]}
                         value={notes}
                         onChangeText={setNotes}
                         multiline
+                        placeholder="Pick-up time, child seat, cargo preference…"
+                        placeholderTextColor={C.faint}
                     />
                 </View>
 
                 {/* ── Summary ── */}
-                <View style={styles.summaryCard}>
-                    <View style={styles.noticeTagRow}>
-                        <Text style={styles.noticeTag}>Booking summary</Text>
-                        <View style={styles.noticeTagLine} />
+                <View style={styles.summary}>
+                    <View style={styles.eyebrowRow}>
+                        <View style={styles.eyebrowLine} />
+                        <Text style={styles.eyebrow}>Booking summary</Text>
                     </View>
-
                     <View style={styles.summaryRow}>
                         <Text style={styles.summaryKey}>Bike</Text>
                         <Text style={styles.summaryValue}>{bikeType || '—'}</Text>
                     </View>
-                    <View style={[styles.summaryRow, styles.summaryRowBorder]}>
-                        <Text style={styles.summaryKey}>Duration</Text>
-                        <Text style={styles.summaryValue}>{durationDays} day{durationDays !== 1 ? 's' : ''}</Text>
-                    </View>
-                    <View style={[styles.summaryRow, styles.summaryRowBorder]}>
+                    <View style={styles.summaryRow}>
                         <Text style={styles.summaryKey}>Quantity</Text>
                         <Text style={styles.summaryValue}>{quantity}</Text>
                     </View>
-                    <View style={styles.summaryDivider} />
                     <View style={styles.summaryRow}>
-                        <Text style={styles.summaryTotalKey}>Estimated total</Text>
-                        <Text style={styles.summaryTotalValue}>
-                            {settings?.currency ?? 'EUR'} {estimatedTotal > 0 ? estimatedTotal.toFixed(0) : '—'}
-                        </Text>
+                        <Text style={styles.summaryKey}>Duration</Text>
+                        <Text style={styles.summaryValue}>{days} {days === 1 ? 'day' : 'days'}</Text>
                     </View>
+                    <View style={styles.totalRow}>
+                        <Text style={styles.totalKey}>Estimated total</Text>
+                        <Text style={styles.totalValue}>{total || '—'}</Text>
+                    </View>
+                    <Text style={styles.small}>
+                        Need more than 10 bikes?{' '}
+                        <Text style={styles.link} onPress={() => Linking.openURL(`https://wa.me/${settings?.whatsapp ?? '4531131165'}`)}>
+                            Message us
+                        </Text>{' '}
+                        for group pricing.
+                    </Text>
                 </View>
 
-                {/* ── Submit ── */}
-                <TouchableOpacity onPress={submitBooking} disabled={loading} style={styles.submitWrap}>
-                    <View style={[styles.submitBtn, loading && styles.submitBtnDisabled]}>
-                        {loading
-                            ? <ActivityIndicator color={C.bg} />
-                            : <Text style={styles.submitText}>Send Booking Request</Text>
-                        }
+                {!!error && (
+                    <View style={styles.error} accessibilityRole="alert">
+                        <Text style={styles.errorText}>{error}</Text>
                     </View>
-                </TouchableOpacity>
+                )}
+
+                <View style={styles.submitWrap}>
+                    <Pressable style={[styles.submit, sending && styles.submitDisabled]} onPress={submit} disabled={sending}>
+                        {sending ? <ActivityIndicator color={C.bg} /> : <Text style={styles.submitText}>Send booking request</Text>}
+                    </Pressable>
+                    <Text style={styles.small}>
+                        By sending you accept our{' '}
+                        <Text style={styles.link} onPress={() => Linking.openURL('https://www.rentbike.nu/privacy-policy/')}>
+                            privacy policy
+                        </Text>
+                        . You pay in the shop at pick-up.
+                    </Text>
+                </View>
 
             </ScrollView>
         </PageBackground>
@@ -356,24 +328,22 @@ export default function BookScreen() {
 }
 
 const styles = StyleSheet.create({
-    page: {
-        flex: 1,
-    },
     content: {
-        paddingBottom: SPACING.lg,
-        gap: SPACING.lg,
+        paddingBottom: SPACING.xl,
+        gap: SPACING.md,
     },
 
     // ── Hero
     hero: {
-        padding: SPACING.lg,
+        paddingHorizontal: SPACING.lg,
         paddingTop: 32,
+        paddingBottom: SPACING.sm,
+        gap: 14,
     },
     eyebrowRow: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,
-        marginBottom: 16,
     },
     eyebrowLine: {
         width: 24,
@@ -389,79 +359,16 @@ const styles = StyleSheet.create({
     },
     title: {
         color: C.white,
-        fontSize: 46,
+        fontSize: 40,
         fontWeight: '900',
-        lineHeight: 48,
+        lineHeight: 44,
         letterSpacing: -1,
-        marginBottom: 10,
-    },
-    titleAccent: {
-        color: C.accent,
-        fontStyle: 'italic',
     },
     subtitle: {
         color: C.muted,
-        fontSize: 13,
+        fontSize: 15,
         fontWeight: '300',
         lineHeight: 22,
-        marginBottom: 24,
-        maxWidth: 280,
-    },
-
-    // ── Metrics bar
-    metricsBar: {
-        flexDirection: 'row',
-        backgroundColor: C.surface,
-        borderRadius: RADIUS.lg,
-        borderWidth: 1,
-        borderColor: C.border,
-        overflow: 'hidden',
-    },
-    metricCell: {
-        flex: 1,
-        paddingVertical: 14,
-        alignItems: 'center',
-    },
-    metricDivider: {
-        width: 1,
-        backgroundColor: C.border,
-        marginVertical: 10,
-    },
-    metricValue: {
-        color: C.white,
-        fontSize: 26,
-        fontWeight: '800',
-        lineHeight: 30,
-    },
-    metricValueAccent: {
-        color: C.accent,
-    },
-    metricLabel: {
-        color: C.faint,
-        fontSize: 9,
-        fontWeight: '500',
-        letterSpacing: 1.5,
-        marginTop: 3,
-    },
-
-    // ── Quick contact
-    quickRow: {
-        flexDirection: 'row',
-        gap: SPACING.sm,
-        paddingHorizontal: SPACING.lg,
-    },
-    quickCard: {
-        flex: 1,
-        backgroundColor: C.surface,
-        borderWidth: 1,
-        borderColor: C.border,
-        borderRadius: RADIUS.lg,
-        padding: SPACING.md,
-    },
-    quickValue: {
-        color: C.white,
-        fontSize: 13,
-        fontWeight: '700',
     },
 
     // ── Panels
@@ -471,120 +378,79 @@ const styles = StyleSheet.create({
         borderColor: C.border,
         borderRadius: RADIUS.lg,
         marginHorizontal: SPACING.lg,
-        overflow: 'hidden',
+        padding: 20,
+        gap: 12,
     },
     panelTitle: {
         color: C.white,
         fontSize: 20,
         fontWeight: '800',
-        padding: SPACING.lg,
-        paddingBottom: SPACING.md,
+        marginBottom: 4,
     },
-    panelDivider: {
-        height: 1,
-        backgroundColor: C.border,
-    },
-
-    // ── Inputs
-    input: {
-        color: C.white,
-        fontSize: 14,
-        fontWeight: '300',
-        paddingVertical: 16,
-        paddingHorizontal: SPACING.lg,
-        borderBottomWidth: 1,
-        borderBottomColor: C.border,
-    },
-    inputLast: {
-        borderBottomWidth: 0,
-    },
-    textArea: {
-        minHeight: 90,
-        textAlignVertical: 'top',
-    },
-
-    // ── Bike options (mirrors whyRow)
-    bikeRow: {
-        paddingVertical: 14,
-        paddingHorizontal: SPACING.lg,
-    },
-    bikeRowBorder: {
-        borderTopWidth: 1,
-        borderTopColor: '#1A1E14',
-    },
-    bikeRowActive: {
-        backgroundColor: '#8DBF5B0D',
-    },
-    bikeRowInner: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 14,
-    },
-    bikeInfo: {
-        flex: 1,
-    },
-    bikeName: {
-        color: C.white,
-        fontSize: 14,
-        fontWeight: '500',
-    },
-    bikePrice: {
-        color: C.accent,
-        fontSize: 12,
-        fontWeight: '400',
-        marginTop: 2,
-    },
-    stockText: {
-        color: C.info,
-        fontSize: 11,
-        fontWeight: '500',
-        letterSpacing: 0.5,
-    },
-    emptyRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 14,
-        padding: SPACING.lg,
-    },
-    emptyText: {
+    muted: {
         color: C.muted,
-        fontSize: 13,
-        fontWeight: '300',
-        flex: 1,
+        fontSize: 14,
     },
 
-    // ── Quantity stepper
+    // ── Bike options
+    options: {
+        gap: 10,
+    },
+    option: {
+        backgroundColor: C.bg,
+        borderWidth: 1,
+        borderColor: C.borderGlow,
+        borderRadius: 16,
+        padding: 16,
+        gap: 2,
+    },
+    optionActive: {
+        borderColor: C.accent,
+        backgroundColor: 'rgba(141, 191, 91, 0.08)',
+    },
+    optionName: {
+        color: C.white,
+        fontSize: 16,
+        fontWeight: '700',
+    },
+    optionPrice: {
+        color: C.accent,
+        fontSize: 14,
+    },
+    optionLeft: {
+        color: C.faint,
+        fontSize: 12,
+    },
+    optionOut: {
+        color: C.red,
+    },
+
+    // ── Stepper
     stepperRow: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingVertical: 14,
-        paddingHorizontal: SPACING.lg,
-    },
-    stepperLabel: {
-        color: C.muted,
-        fontSize: 13,
-        fontWeight: '300',
+        marginTop: 4,
     },
     stepper: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 20,
+        gap: 14,
     },
     stepBtn: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
+        width: 44,
+        height: 44,
+        borderRadius: 22,
         backgroundColor: C.bg,
         borderWidth: 1,
-        borderColor: C.border,
+        borderColor: C.borderGlow,
         alignItems: 'center',
         justifyContent: 'center',
     },
     stepBtnText: {
         color: C.white,
-        fontSize: 20,
-        lineHeight: 22,
+        fontSize: 22,
+        lineHeight: 24,
     },
     stepValue: {
         color: C.white,
@@ -594,122 +460,128 @@ const styles = StyleSheet.create({
         textAlign: 'center',
     },
 
-    // ── Date rows (mirrors whyRow)
-    dateRow: {
-        paddingVertical: 16,
-        paddingHorizontal: SPACING.lg,
+    // ── Fields
+    field: {
+        backgroundColor: C.bg,
+        borderWidth: 1,
+        borderColor: C.borderGlow,
+        borderRadius: 14,
+        paddingVertical: 12,
+        paddingHorizontal: 14,
+        gap: 3,
     },
-    dateRowInner: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 14,
-    },
-    dateLabel: {
-        color: C.faint,
-        fontSize: 9,
+    fieldLabel: {
+        color: C.muted,
+        fontSize: 13,
         fontWeight: '500',
-        letterSpacing: 1.5,
-        marginBottom: 3,
     },
-    dateValue: {
+    fieldValue: {
         color: C.white,
-        fontSize: 14,
+        fontSize: 16,
         fontWeight: '500',
     },
-
-    // ── Why dot (shared)
-    whyDot: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-        backgroundColor: C.border,
-        flexShrink: 0,
+    input: {
+        backgroundColor: C.bg,
+        borderWidth: 1,
+        borderColor: C.borderGlow,
+        borderRadius: 14,
+        color: C.white,
+        fontSize: 16,
+        minHeight: 50,
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        marginTop: -4,
     },
-    whyDotActive: {
-        backgroundColor: C.accent,
+    textArea: {
+        minHeight: 96,
+        textAlignVertical: 'top',
     },
 
-    // ── Summary card (mirrors noticeCard)
-    summaryCard: {
-        backgroundColor: '#0E1A08',
+    // ── Summary
+    summary: {
+        backgroundColor: C.surface2,
         borderWidth: 1,
         borderColor: C.borderGlow,
         borderRadius: RADIUS.lg,
         marginHorizontal: SPACING.lg,
-        padding: SPACING.lg,
-        gap: 12,
-    },
-    noticeTagRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        marginBottom: 4,
-    },
-    noticeTag: {
-        color: C.accent,
-        fontSize: 9,
-        fontWeight: '500',
-        letterSpacing: 2,
-        textTransform: 'uppercase',
-    },
-    noticeTagLine: {
-        flex: 1,
-        height: 1,
-        backgroundColor: C.borderGlow,
+        padding: 20,
+        gap: 10,
     },
     summaryRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        alignItems: 'center',
-    },
-    summaryRowBorder: {
-        paddingTop: 10,
-        marginTop: 2,
+        gap: 12,
     },
     summaryKey: {
         color: C.muted,
-        fontSize: 13,
-        fontWeight: '300',
+        fontSize: 15,
     },
     summaryValue: {
         color: C.white,
-        fontSize: 13,
-        fontWeight: '500',
+        fontSize: 15,
+        fontWeight: '600',
     },
-    summaryDivider: {
-        height: 1,
-        backgroundColor: C.borderGlow,
-        marginVertical: 4,
+    totalRow: {
+        flexDirection: 'row',
+        alignItems: 'baseline',
+        justifyContent: 'space-between',
+        borderTopWidth: 1,
+        borderTopColor: C.borderGlow,
+        paddingTop: 12,
+        marginTop: 4,
     },
-    summaryTotalKey: {
+    totalKey: {
         color: C.white,
-        fontSize: 14,
+        fontSize: 15,
         fontWeight: '700',
     },
-    summaryTotalValue: {
+    totalValue: {
         color: C.accent,
-        fontSize: 24,
+        fontSize: 30,
         fontWeight: '800',
     },
+    small: {
+        color: C.muted,
+        fontSize: 12,
+        lineHeight: 18,
+    },
+    link: {
+        color: C.accent,
+    },
 
-    // ── Submit button (mirrors actionPrimary pill)
+    // ── Error
+    error: {
+        marginHorizontal: SPACING.lg,
+        padding: 14,
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: 'rgba(240, 138, 122, 0.4)',
+        backgroundColor: 'rgba(240, 138, 122, 0.08)',
+    },
+    errorText: {
+        color: C.red,
+        fontSize: 14,
+        lineHeight: 20,
+    },
+
+    // ── Submit
     submitWrap: {
         paddingHorizontal: SPACING.lg,
-        marginBottom: 20,
+        gap: 12,
     },
-    submitBtn: {
+    submit: {
         backgroundColor: C.accent,
         borderRadius: 100,
-        paddingVertical: 16,
+        minHeight: 54,
         alignItems: 'center',
+        justifyContent: 'center',
     },
-    submitBtnDisabled: {
+    submitDisabled: {
         opacity: 0.6,
     },
     submitText: {
         color: C.bg,
-        fontSize: 14,
+        fontSize: 15,
         fontWeight: '700',
-        letterSpacing: 0.5,
     },
 });
