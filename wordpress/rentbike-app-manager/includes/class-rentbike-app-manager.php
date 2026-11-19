@@ -20,6 +20,8 @@ class RentBike_App_Manager {
         'received' => 'Hi {name}, we got your booking #{id}: {quantity}x {bike}, {dates}. We will confirm soon. Tel {phone}',
         'confirmed' => 'Hi {name}, booking #{id} is CONFIRMED: {quantity}x {bike}, {dates}. Pick up: {street}. Tel {phone}',
         'cancelled' => 'Hi {name}, booking #{id} ({dates}) is cancelled. Questions? Tel {phone}',
+        // Used instead of 'confirmed' when online payment is on.
+        'confirmed_pay' => 'Hi {name}, booking #{id} is CONFIRMED: {quantity}x {bike}, {dates}. Pay {amount} online or in shop: {paylink}',
     ];
 
     /** The first SMS texts (version 2.4). Too long for one SMS; replaced unless the owner changed them. */
@@ -27,6 +29,8 @@ class RentBike_App_Manager {
         'Hi {name}, we received your booking request #{id}: {quantity} x {bike}, {start} to {end}. We will confirm shortly. {shop}, {phone}',
         'Hi {name}, your booking #{id} is CONFIRMED: {quantity} x {bike}, {start} to {end}. Pick up at {address}. Questions: {phone}. {shop}',
         'Hi {name}, your booking #{id} ({start} to {end}) has been cancelled. Questions: {phone}. {shop}',
+        // 2.8.0 payment SMS, before "pay in the shop" was added
+        'Hi {name}, booking #{id} is CONFIRMED: {quantity}x {bike}, {dates}. Pay {amount} here: {paylink}',
     ];
 
     /** Questions from the old FAQ page. Added once as editable FAQ entries when there are none. */
@@ -67,6 +71,7 @@ class RentBike_App_Manager {
         add_filter('pre_get_document_title', [$this, 'document_title'], 99);
         add_action('template_redirect', [$this, 'redirect_old_pages']);
         add_action('init', [$this, 'handle_quick_action'], 20);
+        add_action('init', [$this, 'handle_pay_link'], 20);
         add_action('wp_enqueue_scripts', [$this, 'enqueue_site_assets'], 999);
     }
 
@@ -174,6 +179,12 @@ class RentBike_App_Manager {
             'sms_text_received' => self::SMS_TEXTS['received'],
             'sms_text_confirmed' => self::SMS_TEXTS['confirmed'],
             'sms_text_cancelled' => self::SMS_TEXTS['cancelled'],
+            'sms_text_confirmed_pay' => self::SMS_TEXTS['confirmed_pay'],
+            // Online payment (Stripe Checkout)
+            'pay_enabled' => false,
+            'stripe_secret' => '',
+            'stripe_webhook_secret' => '',
+            'stripe_currency' => '',
         ];
     }
 
@@ -185,6 +196,11 @@ class RentBike_App_Manager {
             if (in_array($settings['sms_text_' . $event] ?? '', self::OLD_SMS_TEXTS, true)) {
                 $settings['sms_text_' . $event] = self::SMS_TEXTS[$event];
             }
+        }
+        $settings['pay_enabled'] = !empty($settings['pay_enabled']);
+        if (!in_array($settings['stripe_currency'], ['eur', 'dkk'], true)) {
+            // Same currency the prices are shown in.
+            $settings['stripe_currency'] = preg_match('/€|eur/i', (string) $settings['currency']) ? 'eur' : 'dkk';
         }
 
         $hours = [];
@@ -233,6 +249,16 @@ class RentBike_App_Manager {
         $token = trim((string) ($input['sms_token'] ?? ''));
         $out['sms_token'] = !empty($input['sms_token_remove']) ? '' : ($token !== '' ? sanitize_text_field($token) : $saved_token);
         $out['sms_enabled'] = !empty($input['sms_enabled']);
+
+        // Stripe. Keys are never printed back into the form; an empty field keeps the saved key.
+        foreach (['stripe_secret', 'stripe_webhook_secret'] as $key) {
+            $saved_key = is_array($saved) ? (string) ($saved[$key] ?? '') : '';
+            $typed = trim((string) ($input[$key] ?? ''));
+            $out[$key] = !empty($input[$key . '_remove']) ? '' : ($typed !== '' ? sanitize_text_field($typed) : $saved_key);
+        }
+        $out['pay_enabled'] = !empty($input['pay_enabled']);
+        $out['stripe_currency'] = in_array($input['stripe_currency'] ?? '', ['eur', 'dkk'], true) ? $input['stripe_currency'] : '';
+        $out['sms_text_confirmed_pay'] = sanitize_textarea_field($input['sms_text_confirmed_pay'] ?? '');
         $out['sms_region'] = ($input['sms_region'] ?? '') === 'com' ? 'com' : 'eu';
         $out['sms_sender'] = substr(preg_replace('/[^A-Za-z0-9 ]/', '', (string) ($input['sms_sender'] ?? '')), 0, 11);
         foreach (['received', 'confirmed', 'cancelled'] as $event) {
@@ -269,7 +295,7 @@ class RentBike_App_Manager {
 
         // Empty text fields fall back to defaults so the app never gets blanks.
         foreach ($out as $key => $value) {
-            if ($value === '' && !in_array($key, ['play_url', 'reviews_url', 'reviews_shortcode', 'notice_banner', 'location_note', 'sms_token'], true)) {
+            if ($value === '' && !in_array($key, ['play_url', 'reviews_url', 'reviews_shortcode', 'notice_banner', 'location_note', 'sms_token', 'stripe_secret', 'stripe_webhook_secret', 'stripe_currency'], true)) {
                 unset($out[$key]);
             }
         }
@@ -307,7 +333,7 @@ class RentBike_App_Manager {
 <h2>Why we collect it</h2>
 <p>We use these details only to handle your booking: to check availability, confirm the rental, and contact you about it. We do not use them for advertising and we do not sell them.</p>
 <h2>Who receives it</h2>
-<p>Your booking is stored on our website and sent by email to {$name} staff. Our website hosting and email providers process the data on our behalf. If you choose to contact us on WhatsApp, your message is handled by WhatsApp under its own privacy policy.</p>
+<p>Your booking is stored on our website and sent by email to {$name} staff. Our website hosting and email providers process the data on our behalf. If you choose to contact us on WhatsApp, your message is handled by WhatsApp under its own privacy policy." . ($this->payments_ready() ? ' Online payments are handled by Stripe under its own privacy policy. We never see or store your card details.' : '') . "</p>
 <h2>How long we keep it</h2>
 <p>We keep booking details only as long as needed to handle your rental and to meet legal obligations such as bookkeeping rules. After that they are deleted.</p>
 <h2>Your rights</h2>
@@ -439,6 +465,62 @@ class RentBike_App_Manager {
                     <tr>
                         <th scope="row">Placeholders</th>
                         <td><p class="description"><code>{name}</code> <code>{id}</code> <code>{bike}</code> <code>{quantity}</code> <code>{dates}</code> (for example 14-16 Nov) <code>{start}</code> <code>{end}</code> <code>{shop}</code> <code>{phone}</code> <code>{address}</code> <code>{street}</code> (address before the first comma) &nbsp;·&nbsp; One SMS fits 160 characters, longer texts are sent as 2 or more SMS and cost more.</p></td>
+                    </tr>
+                </table>
+
+                <h2 id="payments">Online payment (Stripe)</h2>
+                <p>When you confirm a booking, the customer's confirmation email and SMS get a <strong>Pay</strong> link. They pay the full rental price on Stripe's secure page with card, MobilePay, Apple Pay or Google Pay. The booking is then marked <strong>Paid</strong>. Turn on the payment methods you want in your Stripe Dashboard under Settings → Payment methods.</p>
+                <?php $mode = strpos($s['stripe_secret'], '_test_') !== false ? 'TEST mode (no real money)' : ($s['stripe_secret'] ? 'LIVE mode (real payments)' : ''); ?>
+                <table class="form-table">
+                    <tr>
+                        <th scope="row">Online payment</th>
+                        <td>
+                            <label><input type="checkbox" name="<?php echo esc_attr(self::OPTION); ?>[pay_enabled]" value="1" <?php checked($s['pay_enabled']); ?> /> Send a payment link when I confirm a booking</label>
+                            <?php if ($mode) : ?><p class="description"><strong><?php echo esc_html($mode); ?></strong></p><?php endif; ?>
+                        </td>
+                    </tr>
+                    <?php foreach (['stripe_secret' => ['Stripe secret key', 'Stripe Dashboard → Developers → API keys → Secret key (starts with sk_live_ or sk_test_).'], 'stripe_webhook_secret' => ['Webhook signing secret (recommended)', 'Marks bookings as paid even if the customer closes the browser right after paying. See the steps below.']] as $key => $text) : ?>
+                        <tr>
+                            <th scope="row"><label for="rb_<?php echo esc_attr($key); ?>"><?php echo esc_html($text[0]); ?></label></th>
+                            <td>
+                                <input id="rb_<?php echo esc_attr($key); ?>" type="password" class="regular-text" autocomplete="new-password" name="<?php echo esc_attr(self::OPTION . '[' . $key . ']'); ?>" value="" placeholder="<?php echo $s[$key] ? esc_attr('Saved. Leave empty to keep it.') : ''; ?>" />
+                                <?php if ($s[$key]) : ?>
+                                    <label style="margin-left:8px"><input type="checkbox" name="<?php echo esc_attr(self::OPTION . '[' . $key . '_remove]'); ?>" value="1" /> Remove saved key</label>
+                                <?php endif; ?>
+                                <p class="description"><?php echo esc_html($text[1]); ?></p>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    <tr>
+                        <th scope="row"><label for="rb_stripe_currency">Charge in</label></th>
+                        <td>
+                            <select id="rb_stripe_currency" name="<?php echo esc_attr(self::OPTION); ?>[stripe_currency]">
+                                <option value="eur" <?php selected($s['stripe_currency'], 'eur'); ?>>EUR (€)</option>
+                                <option value="dkk" <?php selected($s['stripe_currency'], 'dkk'); ?>>DKK (kr)</option>
+                            </select>
+                            <p class="description">Must be the same currency as your bike prices (now shown in <?php echo esc_html($s['currency']); ?>).</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Webhook</th>
+                        <td>
+                            <p class="description">In Stripe: Developers → Webhooks → Add destination. Endpoint URL:<br><code><?php echo esc_html(rest_url('rentbike/v1/stripe-webhook')); ?></code><br>Events: <code>checkout.session.completed</code> and <code>checkout.session.async_payment_succeeded</code>. Then copy the signing secret (whsec_…) into the field above.</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Confirmation SMS with payment link</th>
+                        <td>
+                            <textarea class="large-text" rows="2" name="<?php echo esc_attr(self::OPTION); ?>[sms_text_confirmed_pay]"><?php echo esc_textarea($s['sms_text_confirmed_pay']); ?></textarea>
+                            <?php
+                            $example = $this->sms_text($s['sms_text_confirmed_pay'], [
+                                'name' => 'Christina', 'id' => '2190', 'bike' => 'Cargo Bike', 'quantity' => '2',
+                                'start' => current_time('Y-m-d'), 'end' => gmdate('Y-m-d', strtotime(current_time('Y-m-d') . ' +2 days')),
+                                'amount' => $this->format_price(150), 'paylink' => home_url('/') . '?rbpay=2190.0123456789ab',
+                            ]);
+                            $parts = $this->sms_parts($example);
+                            ?>
+                            <p class="description" style="<?php echo $parts > 1 ? 'color:#b32d2e' : ''; ?>">Used instead of the normal confirmation SMS when online payment is on. Extra placeholders: <code>{amount}</code> <code>{paylink}</code>.<br>Example (<?php echo esc_html(mb_strlen($example) . ' characters, ' . $parts . ' SMS'); ?>): <?php echo esc_html($example); ?></p>
+                        </td>
                     </tr>
                 </table>
 
@@ -665,6 +747,26 @@ class RentBike_App_Manager {
             <?php endif; ?>
             <tr><th>Notes</th><td><?php echo nl2br(esc_html($get('notes') ?: '—')); ?></td></tr>
             <tr><th>Sent from</th><td><?php echo esc_html($get('source') ?: 'app'); ?></td></tr>
+            <?php if ($this->payments_ready() || $this->is_paid($post->ID)) :
+                if (($get('status') === 'confirmed')) {
+                    $this->refresh_payment($post->ID);
+                } ?>
+                <tr><th>Payment</th><td>
+                    <?php if ($this->is_paid($post->ID)) : ?>
+                        <strong style="color:#1a7f37">Paid <?php echo esc_html($this->format_price(get_post_meta($post->ID, 'paid_amount', true))); ?></strong>
+                        on <?php echo esc_html(get_post_meta($post->ID, 'paid_at', true)); ?> (Stripe)
+                        <p class="description">To refund, open the payment in your Stripe Dashboard and click Refund.</p>
+                    <?php elseif ($this->can_pay_online($post->ID)) : ?>
+                        <?php if ($get('payment_choice') === 'shop') : ?>
+                            <strong style="color:#2271b1">Customer pays in the shop</strong> (chose this on <?php echo esc_html($get('payment_choice_at')); ?>). Collect <?php echo esc_html($this->format_price($get('total'))); ?> at pick-up.<br>
+                        <?php endif; ?>
+                        Not paid yet. <?php echo $get('status') === 'confirmed' ? 'The customer got this payment link:' : 'The customer gets this payment link when you confirm:'; ?><br>
+                        <input type="text" readonly class="large-text" value="<?php echo esc_attr($this->pay_url($post->ID)); ?>" onclick="this.select()" />
+                    <?php else : ?>
+                        — (no price on this booking, pay in the shop)
+                    <?php endif; ?>
+                </td></tr>
+            <?php endif; ?>
             <tr><th>Messages</th><td>
                 <?php
                 $log = get_post_meta($post->ID, 'message_log', true);
@@ -735,8 +837,11 @@ class RentBike_App_Manager {
                 $subject = 'Your booking #' . $booking_id . ' is confirmed - ' . $s['business_name'];
                 $body = "Hi {$f['name']},\n\nGood news: your booking #{$booking_id} is confirmed.\n\n";
                 $body .= "Bike: {$f['quantity']} x {$f['bike_type']}\nFrom: {$f['start_date']}\nTo: {$f['end_date']}\n";
-                if ($f['total'] !== '') {
-                    $body .= "Estimated total: {$s['currency']} {$f['total']} (pay in the shop at pick-up)\n";
+                if ($this->can_pay_online($booking_id)) {
+                    $body .= "\nTotal: " . $this->format_price($f['total']) . "\n\nPay online now (card, MobilePay, Apple Pay or Google Pay):\n" . $this->pay_url($booking_id) . "\n";
+                    $body .= "Prefer cash? Open the same link and tap \"Pay in the shop instead\", or just pay when you pick up the bikes.\n";
+                } elseif ($f['total'] !== '') {
+                    $body .= "Estimated total: " . $this->format_price($f['total']) . " (pay in the shop at pick-up)\n";
                 }
                 $body .= "\nPick-up: {$s['address']}\nQuestions? WhatsApp or call us on {$s['phone']}.\n\nSee you soon,\n{$s['business_name']}\n";
             } else {
@@ -773,13 +878,19 @@ class RentBike_App_Manager {
         if (!$f['phone']) {
             return;
         }
-        $text = $this->sms_text($s['sms_text_' . $event], [
+        $template = $s['sms_text_' . $event];
+        if ($event === 'confirmed' && $this->can_pay_online($booking_id) && trim($s['sms_text_confirmed_pay']) !== '') {
+            $template = $s['sms_text_confirmed_pay'];
+        }
+        $text = $this->sms_text($template, [
             'name' => $f['name'],
             'id' => (string) $booking_id,
             'bike' => $f['bike_type'],
             'quantity' => $f['quantity'],
             'start' => $f['start_date'],
             'end' => $f['end_date'],
+            'amount' => $this->format_price($f['total']),
+            'paylink' => $this->can_pay_online($booking_id) ? $this->pay_url($booking_id) : '',
         ]);
         $result = $this->send_sms($f['phone'], $text, 'booking-' . $booking_id);
         $this->log_message($booking_id, ucfirst($event) . ' SMS', $result === true, $result === true ? 'to ' . $f['phone'] : $result);
@@ -817,6 +928,8 @@ class RentBike_App_Manager {
             '{phone}' => $s['phone'],
             '{address}' => $s['address'],
             '{street}' => trim(strtok($s['address'], ',') ?: $s['address']),
+            '{amount}' => $booking['amount'] ?? '',
+            '{paylink}' => $booking['paylink'] ?? '',
         ]));
     }
 
@@ -982,6 +1095,7 @@ class RentBike_App_Manager {
             'rb_dates' => 'Dates',
             'rb_contact' => 'Contact',
             'rb_status' => 'Status',
+            'rb_paid' => 'Payment',
             'date' => 'Received',
         ];
     }
@@ -1003,6 +1117,16 @@ class RentBike_App_Manager {
             $status = $get('status') ?: 'new';
             $colors = ['new' => '#b26a00', 'confirmed' => '#1a7f37', 'completed' => '#57606a', 'cancelled' => '#cf222e'];
             echo '<strong style="color:' . esc_attr($colors[$status] ?? '#57606a') . '">' . esc_html(self::STATUSES[$status] ?? $status) . '</strong>';
+        } elseif ($column === 'rb_paid') {
+            if ($this->is_paid($post_id)) {
+                echo '<strong style="color:#1a7f37">Paid ' . esc_html($this->format_price($get('paid_amount'))) . '</strong>';
+            } elseif ($this->can_pay_online($post_id) && $get('status') === 'confirmed') {
+                echo get_post_meta($post_id, 'payment_choice', true) === 'shop'
+                    ? '<span style="color:#2271b1">Pays in shop</span>'
+                    : '<span style="color:#b26a00">Waiting</span>';
+            } else {
+                echo '—';
+            }
         }
     }
 
@@ -1017,6 +1141,7 @@ class RentBike_App_Manager {
         register_rest_route('rentbike/v1', '/faq', ['methods' => 'GET', 'callback' => [$this, 'api_get_faq']] + $public);
         register_rest_route('rentbike/v1', '/availability', ['methods' => 'GET', 'callback' => [$this, 'api_get_availability']] + $public);
         register_rest_route('rentbike/v1', '/bookings', ['methods' => 'POST', 'callback' => [$this, 'api_create_booking']] + $public);
+        register_rest_route('rentbike/v1', '/stripe-webhook', ['methods' => 'POST', 'callback' => [$this, 'api_stripe_webhook']] + $public);
     }
 
     public function api_get_settings() {
@@ -1024,8 +1149,10 @@ class RentBike_App_Manager {
         unset($settings['site_enabled'], $settings['reviews_shortcode'], $settings['hero_image']);
         $settings['show_banner'] = false;
         $settings['notice_banner'] = '';
+        $settings['payments_online'] = $this->payments_ready();
+        unset($settings['pay_enabled']);
         foreach (array_keys($settings) as $key) {
-            if (strpos($key, 'sms_') === 0) {
+            if (strpos($key, 'sms_') === 0 || strpos($key, 'stripe_') === 0) {
                 unset($settings[$key]);
             }
         }
@@ -1251,6 +1378,280 @@ class RentBike_App_Manager {
     }
 
     /* ------------------------------------------------------------------
+     * Online payment (Stripe Checkout)
+     * ---------------------------------------------------------------- */
+
+    public function payments_ready() {
+        $s = $this->get_settings();
+        return $s['pay_enabled'] && $s['stripe_secret'] !== '';
+    }
+
+    public function is_paid($booking_id) {
+        return get_post_meta($booking_id, 'payment_status', true) === 'paid';
+    }
+
+    private function amount_cents($booking_id) {
+        $total = get_post_meta($booking_id, 'total', true);
+        return is_numeric($total) ? (int) round((float) $total * 100) : 0;
+    }
+
+    /** True when this booking can be paid online right now. */
+    public function can_pay_online($booking_id) {
+        return $this->payments_ready() && !$this->is_paid($booking_id) && $this->amount_cents($booking_id) > 0;
+    }
+
+    private function pay_key($booking_id) {
+        return substr(hash_hmac('sha256', $booking_id . '|pay', wp_salt('auth') . '|rentbike-pay'), 0, 12);
+    }
+
+    /** Short, never-expiring link for the customer. Each tap starts a fresh Stripe Checkout. */
+    public function pay_url($booking_id) {
+        return home_url('/') . '?rbpay=' . $booking_id . '.' . $this->pay_key($booking_id);
+    }
+
+    private function stripe_request($method, $path, $params = []) {
+        $s = $this->get_settings();
+        $url = 'https://api.stripe.com/v1/' . $path;
+        $args = [
+            'method' => $method,
+            'timeout' => 20,
+            'headers' => ['Authorization' => 'Bearer ' . $s['stripe_secret']],
+        ];
+        if ($method === 'POST') {
+            $args['body'] = $params;
+        } elseif ($params) {
+            $url = add_query_arg($params, $url);
+        }
+        $response = wp_remote_request($url, $args);
+        if (is_wp_error($response)) {
+            return new WP_Error('stripe', 'Could not reach Stripe: ' . $response->get_error_message());
+        }
+        $code = (int) wp_remote_retrieve_response_code($response);
+        $data = json_decode((string) wp_remote_retrieve_body($response), true);
+        if ($code < 200 || $code >= 300) {
+            $message = is_array($data) && isset($data['error']['message']) ? $data['error']['message'] : 'unknown error';
+            return new WP_Error('stripe', 'Stripe error ' . $code . ': ' . $message);
+        }
+        return is_array($data) ? $data : new WP_Error('stripe', 'Unexpected answer from Stripe.');
+    }
+
+    private function create_checkout($booking_id) {
+        $s = $this->get_settings();
+        $f = $this->booking_fields($booking_id);
+        $back = $this->pay_url($booking_id);
+        $params = [
+            'mode' => 'payment',
+            'submit_type' => 'book',
+            'locale' => 'auto',
+            'client_reference_id' => (string) $booking_id,
+            'line_items[0][quantity]' => 1,
+            'line_items[0][price_data][currency]' => $s['stripe_currency'],
+            'line_items[0][price_data][unit_amount]' => $this->amount_cents($booking_id),
+            'line_items[0][price_data][product_data][name]' => 'Bike rental #' . $booking_id . ': ' . $f['quantity'] . ' x ' . $f['bike_type'] . ', ' . $this->sms_dates($f['start_date'], $f['end_date']),
+            'metadata[booking_id]' => (string) $booking_id,
+            'payment_intent_data[metadata][booking_id]' => (string) $booking_id,
+            'payment_intent_data[description]' => $s['business_name'] . ' booking #' . $booking_id,
+            'success_url' => $back . '&rbpaid={CHECKOUT_SESSION_ID}',
+            'cancel_url' => $back . '&rbcancel=1',
+        ];
+        if (is_email($f['email'])) {
+            $params['customer_email'] = $f['email'];
+        }
+        $session = $this->stripe_request('POST', 'checkout/sessions', $params);
+        if (!is_wp_error($session) && !empty($session['id'])) {
+            add_post_meta($booking_id, 'stripe_session', $session['id']);
+        }
+        return $session;
+    }
+
+    /** Asks Stripe whether one of this booking's checkouts was paid (for when the webhook is not set up). */
+    public function refresh_payment($booking_id) {
+        if ($this->is_paid($booking_id) || !$this->payments_ready()) {
+            return;
+        }
+        $sessions = array_slice(array_reverse((array) get_post_meta($booking_id, 'stripe_session', false)), 0, 3);
+        foreach ($sessions as $session_id) {
+            $session = $this->stripe_request('GET', 'checkout/sessions/' . rawurlencode($session_id));
+            if (!is_wp_error($session) && ($session['payment_status'] ?? '') === 'paid' && (string) ($session['client_reference_id'] ?? '') === (string) $booking_id) {
+                $this->mark_paid($booking_id, $session);
+                return;
+            }
+        }
+    }
+
+    private function mark_paid($booking_id, $session) {
+        // add_post_meta with $unique fails if the key exists: stops double emails when
+        // the webhook and the customer's return page arrive at the same moment.
+        if ($this->is_paid($booking_id) || !add_post_meta($booking_id, 'payment_lock', 1, true)) {
+            return;
+        }
+        $amount = number_format(((int) ($session['amount_total'] ?? 0)) / 100, 2, '.', '');
+        update_post_meta($booking_id, 'payment_status', 'paid');
+        update_post_meta($booking_id, 'paid_amount', $amount);
+        update_post_meta($booking_id, 'paid_at', current_time('mysql'));
+        update_post_meta($booking_id, 'stripe_payment_intent', is_string($session['payment_intent'] ?? null) ? $session['payment_intent'] : '');
+
+        $s = $this->get_settings();
+        $f = $this->booking_fields($booking_id);
+        $money = $this->format_price($amount);
+        $this->log_message($booking_id, 'Payment', true, $money . ' received through Stripe');
+
+        if ($f['email']) {
+            $body = "Hi {$f['name']},\n\nThank you! We received your payment of {$money} for booking #{$booking_id}.\n\n";
+            $body .= "Bike: {$f['quantity']} x {$f['bike_type']}\nFrom: {$f['start_date']}\nTo: {$f['end_date']}\n\nPick-up: {$s['address']}\nQuestions? WhatsApp or call us on {$s['phone']}.\n\nSee you soon,\n{$s['business_name']}\n";
+            $sent = wp_mail($f['email'], 'Payment received for booking #' . $booking_id . ' - ' . $s['business_name'], $body, ['Reply-To: ' . $s['business_name'] . ' <' . $s['booking_email'] . '>']);
+            $this->log_message($booking_id, 'Payment email', $sent, $sent ? 'to ' . $f['email'] : 'WordPress could not send the email');
+        }
+        wp_mail(
+            $s['booking_email'],
+            'Booking #' . $booking_id . ' is paid (' . $money . ')',
+            "{$f['name']} paid {$money} for booking #{$booking_id} ({$f['quantity']} x {$f['bike_type']}, {$f['start_date']} to {$f['end_date']}).\n\n" . admin_url('post.php?post=' . $booking_id . '&action=edit') . "\n"
+        );
+    }
+
+    /** The customer's payment link: ?rbpay=ID.KEY */
+    public function handle_pay_link() {
+        if (!isset($_GET['rbpay'])) {
+            return;
+        }
+        nocache_headers();
+        header('X-Robots-Tag: noindex, nofollow');
+
+        $parts = explode('.', sanitize_text_field(wp_unslash($_GET['rbpay'])), 2);
+        $id = absint($parts[0] ?? 0);
+        if (!$id || get_post_type($id) !== 'rentbike_booking' || !hash_equals($this->pay_key($id), (string) ($parts[1] ?? ''))) {
+            $this->quick_page('Link not valid', '<p>This payment link is broken or incomplete. Please contact us.</p>', 403);
+        }
+
+        $s = $this->get_settings();
+        $f = $this->booking_fields($id);
+        $status = get_post_meta($id, 'status', true) ?: 'new';
+        $contact = '<p class="muted">Questions? WhatsApp or call ' . esc_html($s['phone']) . '.</p>';
+
+        // Back from Stripe after paying.
+        if (!empty($_GET['rbpaid']) && !$this->is_paid($id) && $this->payments_ready()) {
+            $session = $this->stripe_request('GET', 'checkout/sessions/' . rawurlencode(sanitize_text_field(wp_unslash($_GET['rbpaid']))));
+            if (!is_wp_error($session) && ($session['payment_status'] ?? '') === 'paid' && (string) ($session['client_reference_id'] ?? '') === (string) $id) {
+                $this->mark_paid($id, $session);
+            }
+        }
+        if (!$this->is_paid($id)) {
+            $this->refresh_payment($id);
+        }
+
+        $summary = '<table>'
+            . '<tr><th>Booking</th><td>#' . esc_html($id) . '</td></tr>'
+            . '<tr><th>Bike</th><td>' . esc_html($f['quantity'] . ' x ' . $f['bike_type']) . '</td></tr>'
+            . '<tr><th>Dates</th><td>' . esc_html($this->sms_dates($f['start_date'], $f['end_date'])) . '</td></tr>'
+            . '<tr><th>Pick-up</th><td>' . esc_html(trim(strtok($s['address'], ',') ?: $s['address'])) . '</td></tr>'
+            . '<tr><th>Total</th><td><strong>' . esc_html($this->format_price($f['total']) ?: '-') . '</strong></td></tr>'
+            . '</table>';
+
+        if ($this->is_paid($id)) {
+            $paid = $this->format_price(get_post_meta($id, 'paid_amount', true));
+            $this->quick_page('Thank you, booking #' . $id . ' is paid', '<p class="ok">✓ We received ' . esc_html($paid) . '. A receipt is on its way to your email.</p>' . $summary . $contact);
+        }
+        if ($status === 'cancelled') {
+            $this->quick_page('Booking #' . $id . ' is cancelled', '<p>This booking was cancelled, so there is nothing to pay.</p>' . $contact);
+        }
+        if ($status !== 'confirmed') {
+            $this->quick_page('Booking #' . $id . ' is not confirmed yet', '<p>We send you a payment link as soon as we confirm your booking.</p>' . $contact);
+        }
+        if (!$this->can_pay_online($id)) {
+            $this->quick_page('Pay in the shop', '<p>Online payment is not available for this booking. You pay when you pick up the bikes.</p>' . $summary . $contact);
+        }
+
+        $choice = get_post_meta($id, 'payment_choice', true);
+
+        // "Pay in the shop instead"
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && ($_POST['rbchoice'] ?? '') === 'shop') {
+            if ($choice !== 'shop') {
+                update_post_meta($id, 'payment_choice', 'shop');
+                update_post_meta($id, 'payment_choice_at', current_time('mysql'));
+                $this->log_message($id, 'Payment', true, 'Customer will pay in the shop');
+                wp_mail(
+                    $s['booking_email'],
+                    'Booking #' . $id . ': customer pays in the shop',
+                    "{$f['name']} chose to pay " . $this->format_price($f['total']) . " in the shop for booking #{$id} ({$f['quantity']} x {$f['bike_type']}, {$f['start_date']} to {$f['end_date']}).\n\n" . admin_url('post.php?post=' . $id . '&action=edit') . "\n"
+                );
+            }
+            $this->quick_page(
+                'OK, you pay in the shop',
+                '<p class="ok">✓ Your booking #' . esc_html($id) . ' stays confirmed. Pay ' . esc_html($this->format_price($f['total'])) . ' when you pick up the bikes (cash, card or MobilePay).</p>'
+                . $summary
+                . '<p class="muted">Changed your mind? <a href="' . esc_url($this->pay_url($id)) . '">Pay online instead</a>.</p>' . $contact
+            );
+        }
+
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+            $session = $this->create_checkout($id);
+            $url = is_wp_error($session) ? '' : (string) ($session['url'] ?? '');
+            if ($url && preg_match('#^https://([a-z0-9-]+\.)*stripe\.com/#i', $url)) {
+                wp_redirect($url, 303);
+                exit;
+            }
+            $this->log_message($id, 'Payment', false, is_wp_error($session) ? $session->get_error_message() : 'No checkout link from Stripe');
+            $this->quick_page('Payment could not start', '<p class="bad">Something went wrong on our side. Please try again in a moment, or pay in the shop.</p>' . $contact);
+        }
+
+        $note = !empty($_GET['rbcancel']) ? '<p class="bad">The payment was not completed. You can try again, or pay in the shop.</p>' : '';
+        if ($choice === 'shop') {
+            $note .= '<p class="muted">You chose to pay in the shop. You can still pay online here if you prefer.</p>';
+        }
+        $button = '<form method="post"><input type="hidden" name="rbchoice" value="online"><button type="submit">Pay ' . esc_html($this->format_price($f['total'])) . ' online</button></form>'
+            . '<p class="muted">Card, MobilePay, Apple Pay or Google Pay. Secure payment by Stripe; we never see your card details.</p>'
+            . ($choice === 'shop' ? '' : '<form method="post"><input type="hidden" name="rbchoice" value="shop"><button type="submit" class="ghost">Pay in the shop instead</button></form>'
+                . '<p class="muted">Pay with cash, card or MobilePay when you pick up the bikes.</p>');
+        $this->quick_page('Pay for booking #' . $id, $note . $summary . $button);
+    }
+
+    /** Stripe tells us about finished payments here (optional but recommended). */
+    public function api_stripe_webhook(WP_REST_Request $request) {
+        $s = $this->get_settings();
+        if ($s['stripe_webhook_secret'] === '') {
+            return new WP_Error('no_secret', 'Webhook signing secret is not set in RentBike settings.', ['status' => 400]);
+        }
+        $payload = $request->get_body();
+        $timestamp = '';
+        $signatures = [];
+        foreach (explode(',', (string) $request->get_header('stripe_signature')) as $part) {
+            $pair = explode('=', trim($part), 2);
+            if (count($pair) !== 2) {
+                continue;
+            }
+            if ($pair[0] === 't') {
+                $timestamp = $pair[1];
+            } elseif ($pair[0] === 'v1') {
+                $signatures[] = $pair[1];
+            }
+        }
+        if (!$timestamp || !$signatures || abs(time() - (int) $timestamp) > 300) {
+            return new WP_Error('bad_signature', 'Missing or old signature.', ['status' => 400]);
+        }
+        $expected = hash_hmac('sha256', $timestamp . '.' . $payload, $s['stripe_webhook_secret']);
+        $valid = false;
+        foreach ($signatures as $signature) {
+            if (hash_equals($expected, $signature)) {
+                $valid = true;
+            }
+        }
+        if (!$valid) {
+            return new WP_Error('bad_signature', 'Signature does not match.', ['status' => 400]);
+        }
+
+        $event = json_decode($payload, true);
+        $type = $event['type'] ?? '';
+        $object = $event['data']['object'] ?? [];
+        if (in_array($type, ['checkout.session.completed', 'checkout.session.async_payment_succeeded'], true) && ($object['payment_status'] ?? '') === 'paid') {
+            $id = absint($object['client_reference_id'] ?? ($object['metadata']['booking_id'] ?? 0));
+            if ($id && get_post_type($id) === 'rentbike_booking') {
+                $this->mark_paid($id, $object);
+            }
+        }
+        return rest_ensure_response(['received' => true]);
+    }
+
+    /* ------------------------------------------------------------------
      * Confirm / cancel straight from the booking email (no login)
      * ---------------------------------------------------------------- */
 
@@ -1303,6 +1704,7 @@ class RentBike_App_Manager {
             . '<tr><th>Dates</th><td>' . esc_html($this->sms_dates($f['start_date'], $f['end_date'])) . '</td></tr>'
             . '<tr><th>Phone</th><td>' . esc_html($f['phone'] ?: '-') . '</td></tr>'
             . '<tr><th>Status</th><td>' . esc_html(self::STATUSES[$current] ?? $current) . '</td></tr>'
+            . ($this->is_paid($id) ? '<tr><th>Payment</th><td>Paid ' . esc_html($this->format_price(get_post_meta($id, 'paid_amount', true))) . ($status === 'cancelled' ? ' — refund it in your Stripe Dashboard' : '') . '</td></tr>' : '')
             . '</table>';
 
         if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
@@ -1344,7 +1746,7 @@ class RentBike_App_Manager {
             . 'h1{font-size:26px;line-height:1.15;margin:0 0 18px}table{width:100%;border-collapse:collapse;margin-bottom:20px}'
             . 'th,td{padding:8px 0;border-top:1px solid #1E2218;text-align:left;font-weight:400}th{color:#9A9A8E;width:40%}'
             . 'button{width:100%;min-height:56px;border:0;border-radius:100px;background:#8DBF5B;color:#0C0F0A;font:700 17px system-ui,sans-serif;cursor:pointer}'
-            . 'button.danger{background:#F08A7A}ul{list-style:none;padding:0;margin:0 0 16px}li{padding:6px 0}.ok{color:#8DBF5B}.bad{color:#F08A7A}'
+            . 'button.danger{background:#F08A7A}button.ghost{background:transparent;color:#F0EDE6;border:1px solid #2A3A1A;margin-top:14px}ul{list-style:none;padding:0;margin:0 0 16px}li{padding:6px 0}.ok{color:#8DBF5B}.bad{color:#F08A7A}'
             . '.muted{color:#9A9A8E;font-size:14px}a{color:#8DBF5B}'
             . '</style></head><body><div class="card"><p class="brand">' . esc_html($s['business_name']) . '</p><h1>' . esc_html($title) . '</h1>' . $body . '</div></body></html>';
         exit;

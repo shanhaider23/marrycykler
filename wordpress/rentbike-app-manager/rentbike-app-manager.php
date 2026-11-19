@@ -2,7 +2,7 @@
 /**
  * Plugin Name: RentBike App Manager
  * Description: Backend for the RentBike mobile app and the redesigned website: settings, bikes, FAQ, opening hours, online bookings.
- * Version: 2.7.0
+ * Version: 2.9.0
  * Author: RentBike
  */
 
@@ -18,7 +18,7 @@ if (class_exists('RentBike_App_Manager')) {
     return;
 }
 
-define('RENTBIKE_VERSION', '2.7.0');
+define('RENTBIKE_VERSION', '2.9.0');
 define('RENTBIKE_DIR', plugin_dir_path(__FILE__));
 define('RENTBIKE_URL', plugin_dir_url(__FILE__));
 

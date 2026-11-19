@@ -26,6 +26,8 @@ export type AppSettings = {
   gallery?: string[];
   play_url?: string;
   reviews_url?: string;
+  /** True when the shop takes online payment (link sent after confirmation). */
+  payments_online?: boolean;
 };
 
 export type Bike = {

@@ -318,7 +318,10 @@ export default function BookScreen() {
                         <Text style={styles.link} onPress={() => Linking.openURL('https://www.rentbike.nu/privacy-policy/')}>
                             privacy policy
                         </Text>
-                        . You pay in the shop at pick-up.
+                        .{' '}
+                        {settings?.payments_online
+                            ? 'After we confirm, you get a link to pay online with card or MobilePay.'
+                            : 'You pay in the shop at pick-up.'}
                     </Text>
                 </View>
 

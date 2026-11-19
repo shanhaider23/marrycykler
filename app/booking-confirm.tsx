@@ -2,6 +2,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import PageBackground from '../components/pageBackground';
+import { useSettings } from '../hooks/useSettings';
 import { RADIUS, SPACING } from '../constants/theme';
 
 const C = {
@@ -27,6 +28,7 @@ type Params = {
 export default function BookingConfirmScreen() {
     const router = useRouter();
     const p = useLocalSearchParams<Params>();
+    const { settings } = useSettings();
 
     const whatsappText = [
         `Hello, I sent booking request #${p.id ?? ''} in your app.`,
@@ -52,7 +54,8 @@ export default function BookingConfirmScreen() {
                     <Text style={styles.title}>Thank you, we got it.</Text>
                     <Text style={styles.text}>
                         Your booking request <Text style={styles.strong}>#{p.id}</Text> has been received. We will contact you
-                        shortly to confirm. A copy is on its way to your email.
+                        shortly to confirm{settings?.payments_online ? ' and send you a link to pay online' : ''}. A copy is on its
+                        way to your email.
                     </Text>
 
                     {!!p.bike && (

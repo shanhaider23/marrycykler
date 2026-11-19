@@ -325,7 +325,7 @@ $today = current_time('Y-m-d');
 
                 <p class="rb-error" id="rb-error" role="alert" hidden></p>
                 <button class="rb-btn rb-btn-primary rb-btn-block" type="submit" id="rb-submit">Send booking request</button>
-                <p class="rb-small rb-muted">By sending you accept our <a href="<?php echo esc_url(home_url('/privacy-policy/')); ?>">privacy policy</a>. You pay in the shop at pick-up.</p>
+                <p class="rb-small rb-muted">By sending you accept our <a href="<?php echo esc_url(home_url('/privacy-policy/')); ?>">privacy policy</a>. <?php echo $rb->payments_ready() ? 'After we confirm, you get a link to pay online with card or MobilePay.' : 'You pay in the shop at pick-up.'; ?></p>
             </form>
 
             <aside class="rb-summary" aria-live="polite">
@@ -342,7 +342,7 @@ $today = current_time('Y-m-d');
             <div class="rb-done" id="rb-done" hidden tabindex="-1">
                 <p class="rb-eyebrow">Request sent</p>
                 <h3>Thank you, we got it.</h3>
-                <p>Your booking request <strong id="rb-done-ref"></strong> has been received. We will contact you shortly to confirm. A copy is on its way to your email.</p>
+                <p>Your booking request <strong id="rb-done-ref"></strong> has been received. We will contact you shortly to confirm<?php echo $rb->payments_ready() ? ' and send you a link to pay online' : ''; ?>. A copy is on its way to your email.</p>
                 <div class="rb-actions">
                     <a class="rb-btn rb-btn-primary" id="rb-done-wa" href="<?php echo esc_url($wa_url); ?>" target="_blank" rel="noopener">Also send on WhatsApp</a>
                     <button class="rb-btn rb-btn-ghost" type="button" id="rb-again">Make another booking</button>
