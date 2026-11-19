@@ -29,12 +29,24 @@ class RentBike_App_Manager {
         'Hi {name}, your booking #{id} ({start} to {end}) has been cancelled. Questions: {phone}. {shop}',
     ];
 
+    /** Questions from the old FAQ page. Added once as editable FAQ entries when there are none. */
+    const DEFAULT_FAQ = [
+        ['Can I return the bikes after opening hours?', 'Yes. Lock the bikes outside the shop with the two locks you got, and put the keys in our letterbox.'],
+        ['Do I need to pay a deposit?', 'No. Normal rentals need no deposit.'],
+        ['Do the bikes come with locks?', 'Yes. Every bike comes with two locks, and lights are included too.'],
+        ['Do you rent cargo bikes?', 'Yes. Cargo bikes are popular, so book in advance to be sure one is free.'],
+        ['Can you deliver the bikes to my hotel?', 'Bikes are picked up at our shop. After your rental we can collect them from your hotel.'],
+        ['Are you open at weekends?', 'Yes. See our opening hours at the bottom of the page.'],
+        ['Do you rent bikes to large groups?', 'Yes, groups of up to 50 people. Please book in advance, and for more than 10 bikes message us on WhatsApp for group pricing.'],
+    ];
+
     const LEGACY_LINE = '/^[ \t]*(price_per_day|quantity|active)[ \t]*=[ \t]*(.*?)[ \t]*\r?$/mi';
 
     public function __construct() {
         add_action('init', [$this, 'register_post_types']);
         add_action('admin_menu', [$this, 'register_admin_menu']);
         add_action('admin_init', [$this, 'register_settings']);
+        add_action('admin_init', [$this, 'maybe_seed_faq']);
         add_action('rest_api_init', [$this, 'register_rest_routes']);
 
         // Bikes admin
@@ -263,6 +275,21 @@ class RentBike_App_Manager {
         }
 
         return $out;
+    }
+
+    /**
+     * Splits the privacy text into an intro and sections at each <h2>,
+     * so the page can show them as numbered cards with a contents list.
+     */
+    public function privacy_sections($html) {
+        $parts = preg_split('/<h2[^>]*>(.*?)<\/h2>/is', $html, -1, PREG_SPLIT_DELIM_CAPTURE);
+        $intro = trim(array_shift($parts));
+        $sections = [];
+        for ($i = 0; $i + 1 < count($parts); $i += 2) {
+            $title = trim(wp_strip_all_tags($parts[$i]));
+            $sections[] = ['id' => sanitize_title($title) ?: 'section-' . ($i / 2 + 1), 'title' => $title, 'body' => trim($parts[$i + 1])];
+        }
+        return [$intro, $sections];
     }
 
     /** Shown at /privacy-policy/ until a published page with that address exists. */
@@ -504,6 +531,30 @@ class RentBike_App_Manager {
         return $bikes;
     }
 
+    /**
+     * Adds the default questions as real FAQ entries (once), so the website and
+     * the app show the same list and the owner can edit it under RentBike App > FAQ.
+     */
+    public function maybe_seed_faq() {
+        if (get_option('rentbike_faq_seeded') || !current_user_can('manage_options')) {
+            return;
+        }
+        update_option('rentbike_faq_seeded', 1);
+        $existing = get_posts(['post_type' => 'rentbike_faq', 'post_status' => 'any', 'numberposts' => 1, 'fields' => 'ids']);
+        if ($existing) {
+            return;
+        }
+        foreach (self::DEFAULT_FAQ as $i => $item) {
+            wp_insert_post([
+                'post_type' => 'rentbike_faq',
+                'post_status' => 'publish',
+                'post_title' => $item[0],
+                'post_content' => $item[1],
+                'menu_order' => $i + 1,
+            ]);
+        }
+    }
+
     public function get_faq() {
         $query = new WP_Query([
             'post_type' => 'rentbike_faq',
@@ -520,6 +571,12 @@ class RentBike_App_Manager {
                 'question' => html_entity_decode(get_the_title($post), ENT_QUOTES, 'UTF-8'),
                 'answer' => trim(wp_strip_all_tags($post->post_content)),
             ];
+        }
+        // Until the entries are added (first visit to WordPress admin), show the defaults.
+        if (!$faq && !get_option('rentbike_faq_seeded')) {
+            foreach (self::DEFAULT_FAQ as $i => $item) {
+                $faq[] = ['id' => -($i + 1), 'question' => $item[0], 'answer' => $item[1]];
+            }
         }
         return $faq;
     }

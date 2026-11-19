@@ -85,13 +85,61 @@ $today = current_time('Y-m-d');
 </header>
 
 <?php if ($view === 'privacy') :
-    $page = is_page() ? get_queried_object() : null; ?>
-    <main class="rb-wrap rb-prose">
-        <p class="rb-eyebrow"><?php echo esc_html($s['business_name']); ?></p>
-        <h1><?php echo esc_html($page ? get_the_title($page) : 'Privacy Policy'); ?></h1>
-        <?php echo wp_kses_post($page ? wpautop($page->post_content) : $rb->default_privacy_text()); ?>
-        <p><a class="rb-btn rb-btn-ghost" href="<?php echo esc_url($home); ?>">Back to homepage</a></p>
-    </main>
+    $page = is_page() ? get_queried_object() : null;
+    $policy = $page ? wpautop($page->post_content) : $rb->default_privacy_text();
+    list($intro, $sections) = $rb->privacy_sections($policy);
+    $updated = $page ? get_the_modified_date('j F Y', $page) : ''; ?>
+<main>
+    <section class="rb-hero rb-page-hero">
+        <div class="rb-wrap">
+            <p class="rb-eyebrow">Your data, <?php echo esc_html($s['business_name']); ?></p>
+            <h1><?php echo esc_html($page ? get_the_title($page) : 'Privacy Policy'); ?></h1>
+            <?php if ($intro) : ?>
+                <div class="rb-lead"><?php echo wp_kses_post($intro); ?></div>
+            <?php endif; ?>
+            <?php if (!$page) : ?>
+                <ul class="rb-chips">
+                    <li><span class="rb-dot"></span>No account needed</li>
+                    <li><span class="rb-dot"></span>Only used for your booking</li>
+                    <li><span class="rb-dot"></span>Never sold</li>
+                    <li><span class="rb-dot"></span>Deleted on request</li>
+                </ul>
+            <?php endif; ?>
+            <?php if ($updated) : ?>
+                <p class="rb-small rb-muted">Last updated <?php echo esc_html($updated); ?></p>
+            <?php endif; ?>
+        </div>
+    </section>
+
+    <?php if ($sections) : ?>
+    <section class="rb-wrap rb-policy">
+        <nav class="rb-toc" aria-label="On this page">
+            <p class="rb-footer-head">On this page</p>
+            <ol>
+                <?php foreach ($sections as $i => $section) : ?>
+                    <li><a href="#<?php echo esc_attr($section['id']); ?>"><span><?php echo esc_html(sprintf('%02d', $i + 1)); ?></span><?php echo esc_html($section['title']); ?></a></li>
+                <?php endforeach; ?>
+            </ol>
+        </nav>
+        <div class="rb-policy-sections">
+            <?php foreach ($sections as $i => $section) : ?>
+                <article class="rb-card rb-policy-card" id="<?php echo esc_attr($section['id']); ?>">
+                    <p class="rb-policy-num"><?php echo esc_html(sprintf('%02d', $i + 1)); ?></p>
+                    <h2><?php echo esc_html($section['title']); ?></h2>
+                    <div class="rb-policy-body"><?php echo wp_kses_post($section['body']); ?></div>
+                </article>
+            <?php endforeach; ?>
+            <div class="rb-card rb-policy-help">
+                <div>
+                    <h2>Questions about your data?</h2>
+                    <p>Write to us and we answer within a few days.</p>
+                </div>
+                <a class="rb-btn rb-btn-primary" href="mailto:<?php echo esc_attr($s['email']); ?>"><?php echo esc_html($s['email']); ?></a>
+            </div>
+        </div>
+    </section>
+    <?php endif; ?>
+</main>
 <?php else : ?>
 <main>
 
